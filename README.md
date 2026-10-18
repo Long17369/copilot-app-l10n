@@ -231,6 +231,12 @@ Testing connection, workbuddy    → 正在测试连接：workbuddy
 
 **配色名称保留英文**：58 个主题（`Catppuccin Mocha`、`Tokyo Night`、`Rosé Pine` …）
 登记在 `terminology.json` 的 `keep_english_keys` 里，既不翻译也不上报。
+`GitHub`、`GitHub Copilot`、`github.com` 以及 WSL 发行版名（`Ubuntu-20.04` …）同理。
+
+**跨节点片段会被拼回整句**：React 常把一个标签拆成两个相邻 `<span>`，
+例如 `Show the GitHub Copilot icon in the` + `system tray.`。引擎会跨 1–2 层
+寻找后续片段、补齐丢失的空格、剥离末尾标点后再查词典，命中即整句替换并清空尾片段。
+未命中的片段不会因此被记成缺口。
 
 ## 术语与质量检查
 

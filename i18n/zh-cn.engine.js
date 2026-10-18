@@ -90,9 +90,12 @@
     [/^Last\s+(\d+)\s+days$/i, '最近 $1 天'],
     [/^(\d+)\s+days$/i, '$1 天'],
     [/^\(resets monthly\)$/i, '（每月重置）'],
-    [/^Edit\s+([\w.\-]+\/[\w.\-]+)$/, '编辑 $1'],
-    [/^Remove\s+([\w.\-]+\/[\w.\-]+)$/, '移除 $1'],
-    [/^Remove\s+([a-z0-9][\w.\-]*)$/i, '移除 $1']
+    [/^Edit\s+([\w.\-]+)$/, '编辑 $1'],
+    [/^Remove\s+([a-z0-9][\w.\-]*)$/i, '移除 $1'],
+    [/^Download\s+([a-z0-9][\w.\-]*)$/i, '下载 $1'],
+    [/^Cycle agent modes with\s*(.+)$/i, '用 $1 切换 Agent 模式'],
+    [/^Cycle agent modes with$/i, '切换 Agent 模式：'],
+    [/^Add model by ID$/i, '按 ID 添加模型']
   ];
 
   var ATTRS = [
@@ -142,7 +145,11 @@
     /^[a-z]+[A-Z]\w+$/,                                 // camelCase identifiers
     /^(cd|git|npm|node|python|pip|gh|npx|yarn|pnpm)\s/,  // shell commands
     /[\\/][\w.-]+[\\/]/,                                // anything with a path inside
-    /[`{}<>]|=>|::/                                     // code punctuation
+    /[`{}<>]|=>|::/,                                    // code punctuation
+    /^[·•]\s*[\w.-]+$/,                                 // "· github.com" style suffix
+    /^(Ubuntu|Debian|Fedora|CentOS|Rocky|Alpine|Arch|openSUSE|Kali|WSL)([\s\d.\-]*)$/i,
+    /^[A-Za-z][\w+.-]*-[0-9][\w.-]*$/,                  // Ubuntu-20.04, model ids
+    /^[a-z0-9][\w.-]*(\/[\w.-]+)?$/                       // bare identifiers
   ];
 
   function isNoise(text) {
@@ -154,12 +161,14 @@
 
   function recordMiss(key) {
     var probe = key.trim();
-    if (!probe) return;
+    if (!probe || probe.length < 2) return;
     // Only sentence- or label-shaped strings matter; bare fragments are layout noise.
-    if (!/^[A-Z]/.test(probe) && !/\s/.test(probe)) return;
+    // Session/chat titles are user content and usually start lowercase, so requiring an
+    // initial capital keeps them out of the report.
+    if (!/^[A-Z]/.test(probe) && !/^(e\.g\.|i\.e\.)/i.test(probe)) return;
     // Already localized, or user/agent content that merely contains Latin text.
     if (HAS_CJK.test(probe)) return;
-    if (probe.length > 160) return;
+    if (probe.length > 200) return;
     if (isNoise(probe)) return;
     misses.add(key);
   }
@@ -283,22 +292,42 @@
 
   /* React renders `{count} files` as two text nodes ("12" + " files"). Translate the
    * joined form, then blank out the second node so the text is not duplicated. */
+  /* Find the next node that could carry the rest of a split label. React often renders
+   * "Show the GitHub Copilot icon in the" and "system tray." in two sibling <span>s, so
+   * the search has to leave the current element (up to two levels). */
+  function nextCarrier(node) {
+    var cur = node;
+    for (var level = 0; level < 3 && cur; level++) {
+      var sib = cur.nextSibling;
+      while (sib && sib.nodeType !== 3 && sib.nodeType !== 1) sib = sib.nextSibling;
+      if (sib) {
+        if (sib.nodeType === 1 &&
+            (sib.children.length > 1 || sib.childNodes.length > 1)) {
+          return null;  // a container, not a fragment tail
+        }
+        return sib;
+      }
+      cur = cur.parentElement;
+      if (!cur || cur === document.body || cur === document.documentElement) return null;
+    }
+    return null;
+  }
+
   function localizeJoinedText(root) {
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     var node;
     while ((node = walker.nextNode())) {
       var parent = node.parentElement;
       if (!parent || isSkipped(parent)) continue;
-      if (!node.nodeValue || node.nodeValue.length > 12) continue;
+      var value = node.nodeValue;
+      if (!value || value.length > 200) continue;
       // A whitespace-only node plus its neighbour is formatting, not a composed label.
-      if (!node.nodeValue.trim()) continue;
+      if (!value.trim()) continue;
+      // Only join when the first part is not a finished sentence: joining across
+      // sentence boundaries would corrupt two independent labels.
+      if (/[.!?。！？]\s*$/.test(value.trim())) continue;
 
-      // React renders `{count} files` as two text nodes separated by a `<!-- -->`
-      // comment. Skip comments (and other non-text/element nodes) to find the tail.
-      var sibling = node.nextSibling;
-      while (sibling && sibling.nodeType !== 3 && sibling.nodeType !== 1) {
-        sibling = sibling.nextSibling;
-      }
+      var sibling = nextCarrier(node);
       if (!sibling) continue;
 
       var tail = '';
@@ -311,13 +340,29 @@
         tail = sibling.firstChild.nodeValue;
         tailNode = sibling.firstChild;
       }
-      if (!tail) continue;
+      if (!tail || !tail.trim() || tail.trim().length > 80) continue;
 
-      var joined = (node.nodeValue + tail).trim();
-      if (joined.length > 160 || !HAS_LATIN.test(joined)) continue;
-      var t = translate(joined);
+      var rawJoin = value + tail;
+      // Fragments split across elements often lose the separating space:
+      // "…icon in the" + "system tray." must join with one space.
+      if (!/\s$/.test(value) && !/^\s/.test(tail)) rawJoin = value + ' ' + tail;
+      var joined = rawJoin.trim();
+      if (joined.length > 200 || !HAS_LATIN.test(joined)) continue;
+
+      // Dictionary keys are stored without the trailing sentence punctuation that the
+      // rendered label carries, so look up the bare form and re-apply the punctuation.
+      var core = joined.replace(/[.!?。！？]+\s*$/, '');
+      var punct = joined.slice(core.length).trim();
+      // Quiet lookup: a partial join that is not a known label is not a gap.
+      var t = lookup(core, true);
+      if (t === null) t = translateComposite(joined);
+      if (t === null) t = translateComposite(core);
       if (t === null) continue;
-      var lead = /^\s*/.exec(node.nodeValue)[0];
+      if (punct) {
+        var map = { '.': '。', '!': '！', '?': '？' };
+        t = t.replace(/[。！？]$/, '') + (map[punct.charAt(0)] || '');
+      }
+      var lead = /^\s*/.exec(value)[0];
       node.nodeValue = lead + t;
       tailNode.nodeValue = '';
     }
@@ -333,6 +378,9 @@
     if (isSkipped(node)) return;
     localizeAttrs(node);
     if (node.shadowRoot) walk(node.shadowRoot);
+    // Join fragments before the plain text pass, so a label split across two nodes is
+    // translated as a whole and its fragments are never reported as gaps.
+    localizeJoinedText(node);
 
     var walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
@@ -348,7 +396,6 @@
     for (var i = 0; i < all.length; i++) {
       if (!isSkipped(all[i])) localizeAttrs(all[i]);
     }
-    localizeJoinedText(node);
   }
 
   var observer = new MutationObserver(function (mutations) {
@@ -390,6 +437,10 @@
       return Array.from(misses).sort();
     };
     window.__COPILOT_L10N_COPY__ = copyMisses;
+    window.__COPILOT_L10N_SCAN__ = function () {
+      walk(document.body);
+      updateBadge();
+    };
 
     /* Reporting gaps without DevTools.
      *

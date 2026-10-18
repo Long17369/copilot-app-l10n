@@ -24,6 +24,9 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <span id="composite" title="1 hour ago, Response sent, show timestamp">1 hour ago, Response sent, show timestamp</span>
     <span id="composite2">New session, Ctrl + N. New chat, Ctrl + Shift + N.</span>
     <span id="pathnoise">__WINPATH__</span>
+    <span id="frag1">Show the GitHub Copilot icon in the</span><span id="frag2">system tray.</span>
+    <span id="sessiontitle">test model</span>
+    <span id="distro">Ubuntu-20.04</span>
     <span id="shortcutlabel">Edit shortcut for New tab</span>
     <span id="palette">Catppuccin Mocha</span>
     <span id="models">Models (4)</span>
@@ -99,6 +102,20 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('palette not reported', misses.includes('Catppuccin Mocha'), false);
     check('count rule with parentheses', text('#models'), '模型（4）');
     check('quota rule', text('#quota'), '已用配额 49%');
+    check('fragment joined across nodes', text('#frag1'),
+          '在系统托盘中显示 GitHub Copilot 图标。');
+    check('fragment tail cleared', text('#frag2'), '');
+    check('fragment not reported',
+          misses.some((s) => s.indexOf('Show the GitHub Copilot icon') === 0), false);
+    check('model id kept', (function () {
+      const probe = window.document.createElement('span');
+      probe.textContent = 'Edit deepseek-v4.1-flash';
+      window.document.body.appendChild(probe);
+      window.__COPILOT_L10N_SCAN__ && window.__COPILOT_L10N_SCAN__();
+      return probe.textContent;
+    })(), '编辑 deepseek-v4.1-flash');
+    check('session title not reported', misses.includes('test model'), false);
+    check('distro name not reported', misses.includes('Ubuntu-20.04'), false);
 
     clip = null;
     const ev1 = keyEvent({ ctrlKey: true, altKey: true, key: 'Unidentified', code: 'KeyL' });

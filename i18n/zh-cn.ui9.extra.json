@@ -1,0 +1,17 @@
+{
+  "Loading conversation...": "正在加载对话…",
+  "Loading conversation…": "正在加载对话…",
+  "Loading conversations...": "正在加载对话…",
+  "Wait for Computer Use status to finish loading before using these controls.": "请等待计算机操作状态加载完成后再使用这些控件。",
+  "Add a chevron to pull request fix buttons with a \"Fix with instructions\" option that prefills the composer instead of running immediately.": "为拉取请求的修复按钮添加下拉箭头，提供「按指令修复」选项，会把内容预填到输入框而不是立即执行。",
+  ", then choose \"Resume remote session\".": "，然后选择「继续远程会话」。",
+  "\"Hi, \"": "「你好，」",
+  "Hi, ": "你好，",
+  "When you close the window, keep GitHub Copilot running in the system tray instead of quitting. Sessions keep running in the background.": "关闭窗口时让 GitHub Copilot 继续在系统托盘运行，而不是退出；会话会在后台继续运行。",
+  "Show the GitHub Copilot icon in the system tray": "在系统托盘中显示 GitHub Copilot 图标",
+  "Resume remote session": "继续远程会话",
+  "Fix with instructions": "按指令修复",
+  "Computer Use status": "计算机操作状态",
+  "Wait for": "请等待",
+  "before using these controls.": "后再使用这些控件。"
+}
