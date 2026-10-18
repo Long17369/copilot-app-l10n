@@ -1,0 +1,11 @@
+﻿{
+  "name": "copilot-l10n",
+  "private": true,
+  "description": "Dev-only test harness for the runtime localizer engine",
+  "scripts": {
+    "test": "node tools/engine_test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

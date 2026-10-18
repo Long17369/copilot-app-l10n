@@ -113,23 +113,36 @@ cd C:\Users\long1\copilot-l10n
 
 ## 缺少控制台怎么办
 
-应用是 Tauri 打包的发布版，默认没有开发者工具入口。两种办法：
+应用是 Tauri 打包的发布版，默认没有开发者工具入口。用哪种方式都行：
 
-1. **不用控制台**（推荐）：在应用里按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd>，
-   会把你当前界面上**未能翻译**的英文复制到剪贴板，右下角会有提示
-   （提示"当前页面没有发现未翻译的英文"说明确实没有遗漏）。
-   按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>U</kbd> 可重新扫描当前页面。
-2. **开远程调试**：先完全退出应用，再运行 `launch_debug.cmd`，
-   然后浏览器打开 <http://127.0.0.1:9222> 即可用完整 DevTools；
-   控制台里可执行 `__COPILOT_L10N_MISSES__()`。
+1. **右下角「译 N」徽标**（推荐）：只要当前页面还有未翻译文案，右下角就会出现一个小圆标，
+   数字就是条数；**点一下即复制整套清单**到剪贴板。全部翻译完时徽标自动消失。
+2. **快捷键**：<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd> 复制清单，
+   <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>U</kbd> 重新扫描当前页面。
+   匹配基于 `event.code`（`KeyL`），因为 Windows 会把 Ctrl+Alt+字母当作 AltGr，
+   从而改写 `event.key`；监听注册在 `window`/`document` 的**捕获阶段**，
+   不会被 React 的 `stopPropagation` 吞掉。
+3. **远程调试**：先完全退出应用，再运行 `launch_debug.cmd`，
+   浏览器打开 <http://127.0.0.1:9222> 即完整 DevTools；
+   控制台可执行 `__COPILOT_L10N_MISSES__()` 或 `__COPILOT_L10N_COPY__()`。
 
-快捷键不生效时，依次检查：
+如果徽标一直没有出现，说明当前页面确实没有遗漏；此时按快捷键会提示
+「当前页面没有发现未翻译的英文」。
 
-- 是否装的是**新版补丁**（旧版把翻译器放在懒加载分块里，没开会话就不会加载）。
-  现在会自动往入口分块 `index-*.js` 注入一行 `import(...)` 强制提前加载；
-- 用 `status` 确认 `STATE: INSTALLED`，并确认 `payload x1`（不是 `x2`）；
-- 快捷键监听在**捕获阶段**（`window` + `document`），不会被 React 的
-  `stopPropagation` 吞掉。
+## 无法翻译的部分（预期行为）
+
+以下位置**故意不翻译**，避免破坏内容或超出实现边界：
+
+- 聊天正文、代码块、`textarea` 输入内容、可编辑区域（`pre`/`code`/`.markdown-body`）
+- 由 Rust 侧或操作系统绘制的原生菜单、系统对话框、窗口标题栏菜单
+- 第三方图表/电子表格画布里自绘的 canvas 文本
+
+## 引擎测试
+
+```powershell
+npm install            # 仅测试用 jsdom
+npm test               # 17 项：文本/属性/复数合并/短路/徽标/快捷键
+```
 
 ## 抓取未翻译文案（自动）
 

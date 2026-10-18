@@ -109,9 +109,11 @@ def main() -> int:
     args = parser.parse_args()
 
     dictionary = {}
-    if args.missing and os.path.exists(DICT_PATH):
-        with open(DICT_PATH, encoding="utf-8") as fh:
-            dictionary = json.load(fh)
+    if args.missing:
+        sys.path.insert(0, ROOT)
+        import apply_zh
+        dictionary = apply_zh.load_dictionary()
+        print("dictionary: %d entries (base + extras)" % len(dictionary))
 
     counts: dict[str, int] = {}
     scanned = 0

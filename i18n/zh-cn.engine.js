@@ -45,7 +45,17 @@
     [/^(in|after)\s+(\d+)\s*(m|min|minutes?)$/i, '$2 分钟后'],
     [/^(in|after)\s+(\d+)\s*(h|hours?)$/i, '$2 小时后'],
     [/^(in|after)\s+(\d+)\s*(d|days?)$/i, '$2 天后'],
-    [/^(\d+)\s*\/\s*(\d+)$/i, '$1 / $2']
+    [/^(\d+)\s*\/\s*(\d+)$/i, '$1 / $2'],
+    /* Status suffixes rendered as their own span, e.g. "Session" + ", failed". */
+    [/^[,，]\s*edited$/i, '，已编辑'],
+    [/^[,，]\s*edit history$/i, '，编辑历史'],
+    [/^[,，]\s*failed$/i, '，失败'],
+    [/^[,，]\s*succeeded$/i, '，成功'],
+    [/^[,，]\s*modified$/i, '，已修改'],
+    [/^[,，]\s*starting$/i, '，正在启动'],
+    [/^[,，]\s*no project$/i, '，无项目'],
+    [/^[,，]\s*model,?\s*required$/i, '，模型（必填）'],
+    [/^[,，]\s*preview$/i, '，预览']
   ];
 
   var ATTRS = [
@@ -63,6 +73,8 @@
 
   var cache = new Map();
   var misses = new Set();
+  var badgeTimer = null;
+  var updateBadge = null;
 
   function lookup(key) {
     if (!key) return null;
@@ -83,13 +95,20 @@
       }
     }
     cache.set(key, out);
-    if (out === null) misses.add(key);
+    if (out === null) {
+      // Only sentence- or label-shaped strings are worth reporting; single lowercase
+      // fragments ("files", "px") are layout noise, not missing translations.
+      var probe = key.trim();
+      if (/^[A-Z]/.test(probe) || /\s/.test(probe)) misses.add(key);
+    }
     return out;
   }
 
   function translate(key) {
     return lookup(key);
   }
+
+  var HAS_LATIN = /[A-Za-z]/;
 
   function localizeTextNode(node) {
     var value = node.nodeValue;
@@ -98,6 +117,9 @@
     if (!m) return;
     var key = m[2];
     if (!key || key.length > 160) return;
+    // Text without Latin letters is already localized (or user content); translating it
+    // again would both fail and pollute the untranslated list.
+    if (!HAS_LATIN.test(key)) return;
     var t = translate(key);
     if (t !== null && t !== key) node.nodeValue = m[1] + t + m[3];
   }
@@ -105,6 +127,7 @@
   function setTranslatedAttribute(el, name, value) {
     var key = value.trim();
     if (!key || key.length > 160) return;
+    if (!HAS_LATIN.test(key)) return;
     var t = translate(key);
     if (t !== null && t !== key) el.setAttribute(name, value.replace(key, t));
   }
@@ -134,18 +157,39 @@
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     var node;
     while ((node = walker.nextNode())) {
-      var next = node.nextSibling;
-      if (!next || next.nodeType !== 3) continue;
       var parent = node.parentElement;
       if (!parent || isSkipped(parent)) continue;
       if (!node.nodeValue || node.nodeValue.length > 12) continue;
-      var joined = (node.nodeValue + next.nodeValue).trim();
-      if (joined.length > 160) continue;
+      // A whitespace-only node plus its neighbour is formatting, not a composed label.
+      if (!node.nodeValue.trim()) continue;
+
+      // React renders `{count} files` as two text nodes separated by a `<!-- -->`
+      // comment. Skip comments (and other non-text/element nodes) to find the tail.
+      var sibling = node.nextSibling;
+      while (sibling && sibling.nodeType !== 3 && sibling.nodeType !== 1) {
+        sibling = sibling.nextSibling;
+      }
+      if (!sibling) continue;
+
+      var tail = '';
+      var tailNode = null;
+      if (sibling.nodeType === 3) {
+        tail = sibling.nodeValue;
+        tailNode = sibling;
+      } else if (sibling.childNodes.length === 1 &&
+                 sibling.firstChild.nodeType === 3) {
+        tail = sibling.firstChild.nodeValue;
+        tailNode = sibling.firstChild;
+      }
+      if (!tail) continue;
+
+      var joined = (node.nodeValue + tail).trim();
+      if (joined.length > 160 || !HAS_LATIN.test(joined)) continue;
       var t = translate(joined);
       if (t === null) continue;
       var lead = /^\s*/.exec(node.nodeValue)[0];
       node.nodeValue = lead + t;
-      next.nodeValue = '';
+      tailNode.nodeValue = '';
     }
   }
 
@@ -183,11 +227,15 @@
       if (m.type === 'childList') {
         for (var j = 0; j < m.addedNodes.length; j++) walk(m.addedNodes[j]);
       } else if (m.type === 'characterData') {
-        localizeTextNode(m.target);
+        if (!isSkipped(m.target.parentElement)) localizeTextNode(m.target);
       } else if (m.type === 'attributes') {
-        localizeAttrs(m.target);
+        if (!isSkipped(m.target)) localizeAttrs(m.target);
       }
     }
+    badgeTimer = badgeTimer || setTimeout(function () {
+      badgeTimer = null;
+      if (typeof updateBadge === 'function') updateBadge();
+    }, 500);
   });
 
   function start() {
@@ -203,36 +251,44 @@
       attributeFilter: ATTRS
     });
     // Re-apply while the first paint settles (hydration / route mount).
-    setTimeout(function () { walk(document.body); }, 300);
-    setTimeout(function () { walk(document.body); }, 1000);
-    setTimeout(function () { walk(document.body); }, 2500);
+    setTimeout(function () { walk(document.body); updateBadge(); }, 300);
+    setTimeout(function () { walk(document.body); updateBadge(); }, 1000);
+    setTimeout(function () { walk(document.body); updateBadge(); }, 2500);
+    setTimeout(function () { walk(document.body); updateBadge(); }, 6000);
 
     window.__COPILOT_L10N_MISSES__ = function () {
       return Array.from(misses).sort();
     };
+    window.__COPILOT_L10N_COPY__ = copyMisses;
 
-    /* Ctrl+Alt+L copies every string that had no translation, so gaps can be reported
-     * without opening developer tools. Ctrl+Alt+U re-scans the whole document.
+    /* Reporting gaps without DevTools.
      *
-     * The listener is registered on `window` in the capture phase: React attaches its
-     * own handlers at the root container and often calls stopPropagation(), which would
-     * swallow a bubble-phase listener on `document`.
+     * Ctrl+Alt+L copies every string that had no translation. The chord is matched on
+     * `event.code` first because Windows turns Ctrl+Alt+<letter> into AltGr, which
+     * rewrites `event.key` (sometimes to an accented character or "Unidentified").
+     *
+     * A small badge also appears in the corner whenever there are untranslated strings,
+     * so the gaps can be copied with a click when the chord is swallowed by the host.
      */
+    var BADGE_ID = 'copilot-l10n-gaps';
+
     function onShortcut(event) {
       if (!event.ctrlKey || !event.altKey || event.metaKey || event.shiftKey) return;
+      var code = (event.code || '').toLowerCase();
       var key = (event.key || '').toLowerCase();
-      if (!key && event.code) key = event.code.replace('Key', '').toLowerCase();
-      if (key === 'u') {
-        event.preventDefault();
-        event.stopPropagation();
-        walk(document.body);
-        toast('已重新扫描当前页面');
-        return;
-      }
-      if (key !== 'l') return;
+      var isL = code === 'keyl' || key === 'l';
+      var isU = code === 'keyu' || key === 'u';
+      if (!isL && !isU) return;
       event.preventDefault();
       event.stopPropagation();
-      copyMisses();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+      if (isU) {
+        walk(document.body);
+        if (typeof updateBadge === 'function') updateBadge();
+        toast('已重新扫描当前页面');
+      } else {
+        copyMisses();
+      }
     }
 
     function toast(message) {
@@ -243,7 +299,18 @@
         'padding:8px 14px;border-radius:6px;background:#1f6feb;color:#fff;' +
         'font:13px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3)';
       document.body.appendChild(notice);
-      setTimeout(function () { notice.remove(); }, 2500);
+      setTimeout(function () { notice.remove(); }, 3000);
+    }
+
+    function fallbackCopy(text) {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('data-l10n-skip', '');
+      area.style.cssText = 'position:fixed;top:-1000px;left:-1000px;';
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+      area.remove();
     }
 
     function copyMisses() {
@@ -262,19 +329,36 @@
       }
     }
 
-    function fallbackCopy(text) {
-      var area = document.createElement('textarea');
-      area.value = text;
-      area.setAttribute('data-l10n-skip', '');
-      area.style.cssText = 'position:fixed;top:-1000px;left:-1000px;';
-      document.body.appendChild(area);
-      area.select();
-      try { document.execCommand('copy'); } catch (e) { /* ignore */ }
-      area.remove();
+    updateBadge = function () {
+      var badge = document.getElementById(BADGE_ID);      if (!misses.size) {
+        if (badge) badge.remove();
+        return;
+      }
+      if (!badge) {
+        badge = document.createElement('button');
+        badge.id = BADGE_ID;
+        badge.setAttribute('data-l10n-skip', '');
+        badge.type = 'button';
+        badge.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:2147483646;' +
+          'min-width:26px;height:26px;padding:0 7px;border:0;border-radius:13px;' +
+          'background:rgba(31,111,235,.82);color:#fff;font:11px/26px system-ui,sans-serif;' +
+          'cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.28);opacity:.75';
+        badge.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          copyMisses();
+        });
+        document.body.appendChild(badge);
+      }
+      badge.textContent = '译' + misses.size;
+      badge.title = '点击复制 ' + misses.size + ' 条未翻译文案';
     }
 
     window.addEventListener('keydown', onShortcut, true);
     document.addEventListener('keydown', onShortcut, true);
+    window.addEventListener('keyup', onShortcut, true);
+
+    updateBadge();
 
     if (window.console && console.info) {
       console.info('[copilot-l10n] zh-CN active. Ctrl+Alt+L copies untranslated strings.');
