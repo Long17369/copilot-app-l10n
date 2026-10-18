@@ -13,10 +13,25 @@
   } catch (e) { /* ignore */ }
   window.__COPILOT_L10N_ZH__ = true;
 
-  var DICT = __DICT_JSON__;
-  /* Terms that stay in English on purpose (skill, issue, agent, ...). They must not be
-   * translated nor reported as missing. */
+  var EXPECTED = __EXPECT__ || 1;
   var KEEP = __KEEP_JSON__;
+
+  /* Dictionary shards are appended to several app chunks (the payload outgrew a single
+   * chunk); each shard pushes its slice here, so collect them all at start time. */
+  function collectDictionary() {
+    var merged = {};
+    var shards = window.__COPILOT_L10N_DICTS__ || [];
+    for (var i = 0; i < shards.length; i++) {
+      var shard = shards[i];
+      if (!shard) continue;
+      for (var key in shard) {
+        if (Object.prototype.hasOwnProperty.call(shard, key)) merged[key] = shard[key];
+      }
+    }
+    return merged;
+  }
+
+  var DICT = collectDictionary();
 
   var KEEP_SET = new Set(KEEP.map(function (w) { return w.toLowerCase(); }));
   var KEEP_JOINED = new Set(
@@ -419,6 +434,23 @@
     try {
       document.documentElement.lang = 'zh-CN';
     } catch (e) { /* ignore */ }
+    var shards = (window.__COPILOT_L10N_DICTS__ || []).length;
+    if (shards < EXPECTED) {
+      // Some shards live in chunks that are still loading; retry briefly, then start
+      // anyway with whatever arrived so the UI is never blocked.
+      var waited = 0;
+      var timer = setInterval(function () {
+        waited += 100;
+        var now = (window.__COPILOT_L10N_DICTS__ || []).length;
+        if (now >= EXPECTED || waited >= 3000) {
+          clearInterval(timer);
+          DICT = collectDictionary();
+          start();
+        }
+      }, 100);
+      return;
+    }
+    DICT = collectDictionary();
     walk(document.body || document.documentElement);
     observer.observe(document.documentElement, {
       childList: true,

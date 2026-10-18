@@ -161,16 +161,18 @@ def pick_asset(exe: str, payload: bytes) -> str:
     )
 
 
-def bootstrap_transform(asset: str):
-    """Append a static import of `asset` to the entry chunk."""
-    spec = "./" + asset.rsplit("/", 1)[-1]
+def bootstrap_transform(assets):
+    """Append static imports of `assets` to the entry chunk."""
+    specs = ["./" + a.rsplit("/", 1)[-1] for a in assets]
 
     def transform(raw: bytes) -> bytes:
         text = raw.decode("utf-8")
         if BOOT_MARKER in text:
             return raw
-        return (text + '\n' + BOOT_MARKER +
-                'import("%s").catch(function(){});\n' % spec).encode("utf-8")
+        body = "\n" + BOOT_MARKER + "".join(
+            'import("%s").catch(function(){});\n' % spec for spec in specs
+        )
+        return (text + body).encode("utf-8")
 
     return transform
 
@@ -267,28 +269,65 @@ def load_dictionary() -> dict:
     return apply_terminology(merged, load_terminology())
 
 
-def build_payload() -> bytes:
+def build_dictionary_parts(max_bytes: int = 30000):
+    """Split the merged dictionary into shards of roughly `max_bytes` of JSON."""
+    dictionary = load_dictionary()
+    parts, current, size = [], {}, 0
+    for en, zh in dictionary.items():
+        item = json.dumps({en: zh}, ensure_ascii=False)[1:-1]
+        if current and size + len(item) > max_bytes:
+            parts.append(current)
+            current, size = {}, 0
+        current[en] = zh
+        size += len(item)
+    if current:
+        parts.append(current)
+    return parts
+
+
+def build_shard_scripts(max_bytes: int = 30000):
+    """Return JS snippets: the first carries the engine, the rest only add dictionary shards.
+
+    Each snippet registers its share through globals so the engine can wait until every
+    shard has been evaluated before it starts translating.
+    """
     with open(ENGINE, "r", encoding="utf-8") as fh:
         engine = fh.read()
     term = load_terminology()
-    dictionary = load_dictionary()
+    parts = build_dictionary_parts(max_bytes)
 
-    for placeholder in ("__DICT_JSON__", "__KEEP_JSON__"):
+    for placeholder in ("__KEEP_JSON__", "__EXPECT__"):
         if placeholder not in engine:
             raise ValueError("engine is missing the %s placeholder" % placeholder)
     if l10n.MARKER not in engine:
         raise ValueError("engine is missing the l10n marker")
 
-    # Both lists are handed to the engine: keep_english covers bare words, and
-    # keep_english_keys covers full strings (palette names, subscription wording).
-    merged_keep = list(term["keep_english"]) + [
+    keep = list(term["keep_english"]) + [
         k for k in term["keep_english_keys"] if k not in term["keep_english"]
     ]
-    payload = engine.replace("__DICT_JSON__",
-                             json.dumps(dictionary, ensure_ascii=False))
-    payload = payload.replace("__KEEP_JSON__",
-                              json.dumps(merged_keep, ensure_ascii=False))
-    return payload.encode("utf-8")
+    expect = len(parts)
+    shards = []
+    for index, part in enumerate(parts):
+        body = json.dumps(part, ensure_ascii=False)
+        head = (
+            'window.__COPILOT_L10N_EXPECT__=%d;'
+            '(window.__COPILOT_L10N_DICTS__=window.__COPILOT_L10N_DICTS__||[]).push(%s);\n'
+            % (expect, body)
+        )
+        if index == 0:
+            script = head + engine.replace("__KEEP_JSON__",
+                                           json.dumps(keep, ensure_ascii=False))
+            script = script.replace("__EXPECT__", str(expect))
+            shards.append(script)
+        else:
+            shards.append('/*__COPILOT_L10N__*/' + head)
+    return shards
+
+
+def build_payload() -> bytes:
+    """All shards concatenated: valid JS, with the engine last so every shard is queued."""
+    shards = build_shard_scripts(max_bytes=10 ** 9)
+    return ("\n".join(shards)).encode("utf-8")
 
 
 def index_html_transform(raw: bytes) -> bytes:
@@ -313,25 +352,82 @@ def make_append_transform(payload: bytes, force: bool):
     return append
 
 
-def apply_patch(exe: str, asset: str, dry_run: bool = False, force: bool = False):
-    """Patch the startup chunk, the entry bootstrap and index.html in one write."""
-    payload = build_payload()
-    l10n.log("payload: %d bytes" % len(payload))
-    if asset in ("auto", "", None):
-        asset = pick_asset(exe, payload)
+def plan_shards(exe: str, shards):
+    """Assign each shard to the chunk with the most remaining room.
 
-    edits = [
-        (asset, make_append_transform(payload, force)),
-        ("index.html", index_html_transform),
-    ]
-    baseline_assets = [a for a in ASSET_CANDIDATES if a != asset]
-    if asset != ENTRY_ASSET:
-        edits.append((ENTRY_ASSET, bootstrap_transform(asset)))
+    Returns (assignments, assets_used) where assignments is a list of
+    (asset_path, [shard_script, ...]).
+    """
+    bak = l10n.backup_path(exe)
+    source = bak if os.path.exists(bak) else exe
+    found = []
+    with l10n.AssetFile(source) as af:
+        for candidate in ASSET_CANDIDATES:
+            try:
+                found.append((candidate, af.locate(candidate)))
+            except LookupError:
+                continue
+    if not found:
+        raise ValueError("none of the candidate chunks exist in %s" % source)
+
+    # Room per chunk, measured against its pristine compressed size, tracking what has
+    # already been assigned so shards really spread across chunks when needed.
+    pending = {candidate: info["raw"] for candidate, info in found}
+    limits = {candidate: info["br_len"] for candidate, info in found}
+
+    assignments = []
+    order = [c for c, _ in sorted(found, key=lambda kv: -kv[1]["br_len"])]
+    for shard in shards:
+        best = None
+        for candidate in order:
+            packed = l10n.compress(pending[candidate] + b"\n" + shard.encode() + b"\n")
+            slack = limits[candidate] - len(packed)
+            if slack >= MIN_SLACK and (best is None or slack > best[1]):
+                best = (candidate, slack)
+        if best is None:
+            raise ValueError(
+                "the translation payload no longer fits in the startup chunks "
+                "(shard of %d bytes). Shorten the dictionary or add a candidate chunk."
+                % len(shard)
+            )
+        assignments.append((best[0], shard))
+        pending[best[0]] = pending[best[0]] + b"\n" + shard.encode() + b"\n"
+    return assignments
+
+
+def apply_patch(exe: str, asset: str, dry_run: bool = False, force: bool = False):
+    """Patch the startup chunk(s), the entry bootstrap and index.html in one write."""
+    payload = build_payload()
+    shards = build_shard_scripts()
+    l10n.log("payload: %s bytes in %d shard(s)" % (len(payload), len(shards)))
+
+    if asset in ("auto", "", None):
+        assignments = plan_shards(exe, shards)
+    else:
+        assignments = [(asset, shard) for shard in shards]
+
+    by_asset = {}
+    for target, script in assignments:
+        by_asset.setdefault(target, []).append(script)
+    for target, scripts in by_asset.items():
+        l10n.log("%s <- %d shard(s)" % (target, len(scripts)))
+
+    edits = []
+    for target, scripts in by_asset.items():
+        combined = "\n".join(scripts).encode("utf-8")
+        edits.append((target, make_append_transform(combined, force)))
+    edits.append(("index.html", index_html_transform))
+
+    used = [a for a in by_asset]
+    baseline_assets = [a for a in ASSET_CANDIDATES if a not in used]
+    bootstrap_specs = [a for a in used if a != ENTRY_ASSET]
+    if bootstrap_specs:
+        edits.append((ENTRY_ASSET, bootstrap_transform(bootstrap_specs)))
         baseline_assets = [a for a in baseline_assets if a != ENTRY_ASSET]
 
     infos = l10n.rewrite_assets(exe, edits, dry_run, baseline_assets=baseline_assets)
     if not dry_run:
-        _remember(exe, asset)
+        _remember(exe, used[0])
     return payload, infos
 
 

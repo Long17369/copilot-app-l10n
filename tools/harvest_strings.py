@@ -109,11 +109,16 @@ def main() -> int:
     args = parser.parse_args()
 
     dictionary = {}
+    keep = set()
     if args.missing:
         sys.path.insert(0, ROOT)
         import apply_zh
         dictionary = apply_zh.load_dictionary()
-        print("dictionary: %d entries (base + extras)" % len(dictionary))
+        term = apply_zh.load_terminology()
+        keep = {w.strip().lower() for w in term["keep_english"]}
+        keep |= {w.strip().lower() for w in term["keep_english_keys"]}
+        print("dictionary: %d entries, %d keep-English terms"
+              % (len(dictionary), len(keep)))
 
     counts: dict[str, int] = {}
     scanned = 0
@@ -138,6 +143,8 @@ def main() -> int:
                 if not is_candidate(s, args.min_len, args.max_len):
                     continue
                 if args.missing and s in dictionary:
+                    continue
+                if args.missing and s.strip().lower() in keep:
                     continue
                 counts[s] = counts.get(s, 0) + 1
 
