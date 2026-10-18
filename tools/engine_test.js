@@ -25,6 +25,11 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <span id="composite2">New session, Ctrl + N. New chat, Ctrl + Shift + N.</span>
     <span id="pathnoise">__WINPATH__</span>
     <div class="untranslated">Totally unknown phrase here</div>
+    <div class="conversation-pane">
+      <p>Copilot said: three issues fixed.</p>
+      <span>Run engine tests and 14 other tool calls</span>
+      <code>cd C:\work</code>
+    </div>
   </aside>
 </body></html>`.replace('__WINPATH__', String.raw`C:\Users\long1\copilot-l10n\README.md`);
 
@@ -64,6 +69,15 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('composite with two separators', text('#composite2'),
           '新建会话，Ctrl + N。新建对话，Ctrl + Shift + N.');
     check('unknown left alone', text('.untranslated'), 'Totally unknown phrase here');
+
+    // Conversation content must never be translated nor reported.
+    const convo = window.document.querySelector('.conversation-pane');
+    check('transcript not translated', convo.querySelector('p').textContent,
+          'Copilot said: three issues fixed.');
+    check('tool title not reported',
+          window.__COPILOT_L10N_MISSES__().some((s) => s.indexOf('tool calls') >= 0), false);
+    check('transcript text not reported',
+          window.__COPILOT_L10N_MISSES__().some((s) => s.indexOf('Copilot said') >= 0), false);
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
     check('gap badge present', !!badge, true);

@@ -84,7 +84,22 @@
     'data-tooltip-content',
     'alt'
   ];
-  var SKIP_SEL = 'pre,code,kbd,samp,textarea,script,style,[contenteditable="true"],.markdown-body,.monaco-editor,[data-l10n-skip]';
+  var SKIP_SEL = [
+    'pre', 'code', 'kbd', 'samp', 'textarea', 'script', 'style',
+    '[contenteditable="true"]',
+    '.markdown-body', '.monaco-editor',
+    '[data-l10n-skip]',
+    /* Conversation transcript: agent/user messages, tool-call titles and command
+     * output are session content, not UI chrome. Translating them would corrupt the
+     * transcript, so the whole region is left alone. */
+    '[role="log"]', '[role="article"]', '[aria-live="polite"][aria-relevant*="text"]',
+    '[class*="markdown"]', '[class*="Markdown"]',
+    '[class*="transcript"]', '[class*="Transcript"]',
+    '[class*="conversation"]', '[class*="Conversation"]',
+    '[class*="message"]', '[class*="Message"]',
+    '[data-testid*="message"]', '[data-testid*="transcript"]',
+    '[data-testid*="tool-call"]', '[data-testid*="activity"]'
+  ].join(',');
 
   var cache = new Map();
   var misses = new Set();
@@ -103,6 +118,9 @@
     /^[0-9a-f]{7,}$/i,                                  // hashes
     /^[\w-]+\/[\w-]+$/,                                 // owner/repo-ish
     /^[a-z]+[A-Z]\w+$/,                                 // camelCase identifiers
+    /^(cd|git|npm|node|python|pip|gh|npx|yarn|pnpm)\s/,  // shell commands
+    /[\\/][\w.-]+[\\/]/,                                // anything with a path inside
+    /[`{}<>]|=>|::/                                     // code punctuation
   ];
 
   function isNoise(text) {
@@ -115,7 +133,11 @@
   function recordMiss(key) {
     var probe = key.trim();
     if (!probe) return;
+    // Only sentence- or label-shaped strings matter; bare fragments are layout noise.
     if (!/^[A-Z]/.test(probe) && !/\s/.test(probe)) return;
+    // Already localized, or user/agent content that merely contains Latin text.
+    if (HAS_CJK.test(probe)) return;
+    if (probe.length > 160) return;
     if (isNoise(probe)) return;
     misses.add(key);
   }
@@ -193,6 +215,7 @@
   }
 
   var HAS_LATIN = /[A-Za-z]/;
+  var HAS_CJK = /[\u4e00-\u9fff]/;
 
   function localizeTextNode(node) {
     var value = node.nodeValue;
@@ -201,9 +224,10 @@
     if (!m) return;
     var key = m[2];
     if (!key || key.length > 160) return;
-    // Text without Latin letters is already localized (or user content); translating it
-    // again would both fail and pollute the untranslated list.
+    // Text without Latin letters is already localized (or user content).
     if (!HAS_LATIN.test(key)) return;
+    // Mixed CJK+Latin means this string was already localized (possibly composite).
+    if (HAS_CJK.test(key)) return;
     var t = translate(key);
     if (t !== null && t !== key) node.nodeValue = m[1] + t + m[3];
   }
