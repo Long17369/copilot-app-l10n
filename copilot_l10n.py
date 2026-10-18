@@ -40,12 +40,15 @@ Notes
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import mmap
 import os
 import shutil
 import struct
 import sys
+import threading
+import time
 
 try:
     import brotli
@@ -56,6 +59,7 @@ DEFAULT_EXE = r"C:\Users\long1\AppData\Local\Programs\GitHub Copilot\github.exe"
 MARKER = "/*__COPILOT_L10N__*/"
 
 BROTLI_ARGS = dict(quality=11, lgwin=22, mode=brotli.MODE_TEXT)
+BROTLI_QUALITIES = (10, 11)
 MAX_ASSET = 64 * 1024 * 1024
 
 
@@ -108,35 +112,99 @@ def _try_decompress(data, start: int, length: int):
         return None
 
 
-def find_descriptor(data, pe: dict, blob_off: int, expected_len=None):
-    """Return (descriptor_offset, compressed_length) for a blob, or None."""
-    needle = struct.pack("<Q", pe["image_base"] + rva_of(pe, blob_off))
-    pos = data.find(needle)
+def build_descriptor_index(data, pe: dict) -> dict:
+    """Map rva -> (descriptor_offset, compressed_length) by scanning each section once.
+
+    Without this, locating an asset rescans the whole executable for every path string
+    that happens to match, which costs tens of seconds on a 490 MB binary.
+    """
+    index = {}
+    hi = struct.pack("<I", pe["image_base"] >> 32)
+    image_base = pe["image_base"]
+    for sec in pe["sections"]:
+        if sec["raw_size"] < 1024:
+            continue
+        start = sec["raw_ptr"]
+        end = sec["raw_ptr"] + sec["raw_size"] - 16
+        pos = data.find(hi, start, end)
+        while pos != -1:
+            ptr_off = pos - 4
+            if ptr_off >= start and (ptr_off - start) % 8 == 0:
+                ptr = struct.unpack_from("<Q", data, ptr_off)[0]
+                rva = ptr - image_base
+                if 0 < rva < 0x80000000 and rva not in index:
+                    length = struct.unpack_from("<Q", data, ptr_off + 8)[0]
+                    if 16 < length < MAX_ASSET:
+                        index[rva] = (ptr_off, length)
+            pos = data.find(hi, pos + 1, end)
+    return index
+
+
+def find_descriptor(data, pe: dict, blob_off: int, expected_len=None, index=None):
+    """Return (descriptor_offset, compressed_length) for a blob, or None.
+
+    The search is bounded to the section that holds the blob: descriptors live next to
+    the asset blobs, so a full-file scan is never needed.
+    """
+    rva = rva_of(pe, blob_off)
+    if index is not None:
+        hit = index.get(rva)
+        if hit is None:
+            return None
+        desc_off, length = hit
+        if blob_off + length > len(data):
+            return None
+        if expected_len is not None and length != expected_len:
+            return None
+        return desc_off, length
+
+    sec = section_for(pe, blob_off)
+    start = sec["raw_ptr"] if sec else 0
+    end = (sec["raw_ptr"] + sec["raw_size"]) if sec else len(data)
+    needle = struct.pack("<Q", pe["image_base"] + rva)
+    pos = data.find(needle, start, end)
     while pos != -1:
         length = struct.unpack_from("<Q", data, pos + 8)[0]
         if 16 < length < MAX_ASSET and blob_off + length <= len(data):
             if expected_len is None or length == expected_len:
                 return pos, length
-        pos = data.find(needle, pos + 1)
+        pos = data.find(needle, pos + 1, end)
     return None
 
 
-def locate_asset(data, pe: dict, asset: str) -> dict:
+def locate_asset(data, pe: dict, asset: str, index=None) -> dict:
     needle = asset.encode("latin1")
     matches = []
-    pos = data.find(needle)
-    while pos != -1:
-        blob = pos + len(needle)
-        desc = find_descriptor(data, pe, blob)
-        if desc:
-            desc_off, length = desc
-            raw = _try_decompress(data, blob, length)
-            if raw is not None:
-                # exact length: one byte fewer must fail, otherwise the length is wrong
-                if _try_decompress(data, blob, length - 1) is None:
-                    matches.append(dict(path_off=pos, blob_off=blob, desc_off=desc_off,
-                                        br_len=length, raw=raw))
-        pos = data.find(needle, pos + 1)
+    # Asset blobs and their path strings live in the read-only data section, so scan
+    # that range first; only fall back to the whole file when nothing is found.
+    ranges = []
+    for sec in pe["sections"]:
+        if "rdata" in sec["name"].lower() or "rodata" in sec["name"].lower():
+            ranges.append((sec["raw_ptr"], sec["raw_ptr"] + sec["raw_size"]))
+    ranges.append((0, len(data)))
+
+    seen_pos = set()
+    for start, end in ranges:
+        pos = data.find(needle, start, end)
+        while pos != -1:
+            if pos in seen_pos:
+                pos = data.find(needle, pos + 1, end)
+                continue
+            seen_pos.add(pos)
+            blob = pos + len(needle)
+            desc = find_descriptor(data, pe, blob, index=index)
+            if desc:
+                desc_off, length = desc
+                raw = _try_decompress(data, blob, length)
+                if raw is not None:
+                    # exact length: one byte fewer must fail, otherwise the length is wrong
+                    if _try_decompress(data, blob, length - 1) is None:
+                        matches.append(dict(path_off=pos, blob_off=blob,
+                                            desc_off=desc_off,
+                                            br_len=length, raw=raw))
+            pos = data.find(needle, pos + 1, end)
+        if matches:
+            break
 
     if not matches:
         raise LookupError("asset not found: %s" % asset)
@@ -146,30 +214,266 @@ def locate_asset(data, pe: dict, asset: str) -> dict:
     return matches[0]
 
 
+def compress_at(raw: bytes, quality: int) -> bytes:
+    import hashlib
+
+    key = (hashlib.sha1(raw).digest(), quality)
+    cached = _COMPRESS_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    packed = brotli.compress(raw, quality=quality, lgwin=22, mode=brotli.MODE_TEXT)
+    if len(_COMPRESS_CACHE) >= _COMPRESS_CACHE_LIMIT:
+        _COMPRESS_CACHE.clear()
+    _COMPRESS_CACHE[key] = packed
+    return packed
+
+
 def compress(raw: bytes) -> bytes:
-    return brotli.compress(raw, **BROTLI_ARGS)
+    """Best-quality compression (memoised). Used for reporting/stat."""
+    return compress_at(raw, 11)
+
+
+def compress_fitting(raw: bytes, limit: int):
+    """Compress as cheaply as possible while staying within `limit` bytes.
+
+    Quality 10 runs roughly 2.5x faster than 11 on multi-megabyte chunks and is only
+    ~2% larger, so it is tried first and 11 is the fallback. Returns (bytes, quality).
+    """
+    smallest = None
+    smallest_q = BROTLI_QUALITIES[-1]
+    for quality in BROTLI_QUALITIES:
+        packed = compress_at(raw, quality)
+        if smallest is None or len(packed) < len(smallest):
+            smallest, smallest_q = packed, quality
+        if len(packed) <= limit:
+            return packed, quality
+    return smallest, smallest_q
+
+
+_COMPRESS_CACHE: dict = {}
+_COMPRESS_CACHE_LIMIT = 16
+
+
+def log(message: str) -> None:
+    print("[%6.1fs] %s" % (time.monotonic() - _START, message), flush=True)
+
+
+@contextlib.contextmanager
+def heartbeat(label: str):
+    """Print a dot per second while a slow native call runs, so it never looks hung."""
+    stop = threading.Event()
+
+    def run():
+        while not stop.wait(1.0):
+            sys.stdout.write(".")
+            sys.stdout.flush()
+
+    started = time.monotonic()
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    sys.stdout.write("%s " % label)
+    sys.stdout.flush()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+        sys.stdout.write(" done in %.1fs\n" % (time.monotonic() - started))
+        sys.stdout.flush()
+
+
+def _locate_cache_path(path: str):
+    import hashlib
+    import tempfile
+
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    # Keyed by size only: patching changes the mtime but never moves an asset, and every
+    # cached entry is validated by decompressing at the recorded offset.
+    digest = hashlib.sha1(
+        ("%s|%d" % (os.path.abspath(path), size)).encode()
+    ).hexdigest()[:20]
+    return os.path.join(tempfile.gettempdir(), "copilot-l10n-loc-%s.json" % digest)
+
+
+def _load_locate_cache(path: str) -> dict:
+    cache_file = _locate_cache_path(path)
+    if not cache_file:
+        return {}
+    try:
+        with open(cache_file, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_locate_cache(path: str, entries: dict) -> None:
+    cache_file = _locate_cache_path(path)
+    if not cache_file:
+        return
+    try:
+        with open(cache_file, "w", encoding="utf-8") as fh:
+            json.dump(entries, fh)
+    except OSError:
+        pass
+
+
+_START = time.monotonic()
+
+
+def reset_timer() -> None:
+    global _START
+    _START = time.monotonic()
 
 
 # ------------------------------------------------------------------- file I/O
 
+_INDEX_CACHE: dict = {}
+
+
+def _cached_index(path: str, data, pe: dict) -> dict:
+    """Descriptor index for an executable revision, cached in memory and on disk.
+
+    Scanning every section takes seconds on a 490 MB binary and the pipeline opens the
+    file (and its backup) several times, so the result is persisted in the temp dir and
+    keyed by absolute path + size + mtime.
+    """
+    try:
+        stat = os.stat(path)
+        key = (stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return build_descriptor_index(data, pe)
+
+    entry = _INDEX_CACHE.get(path)
+    if entry and entry[0] == key:
+        return entry[1]
+
+    disk = None
+    import hashlib
+    import pickle
+    import tempfile
+
+    try:
+        digest = hashlib.sha1(
+            ("%s|%d|%d" % (os.path.abspath(path), key[0], key[1])).encode()
+        ).hexdigest()[:20]
+        disk = os.path.join(tempfile.gettempdir(), "copilot-l10n-idx-%s.pkl" % digest)
+        with open(disk, "rb") as fh:
+            index = pickle.load(fh)
+        _INDEX_CACHE[path] = (key, index)
+        return index
+    except Exception:  # noqa: BLE001 - any cache miss is fine
+        pass
+
+    index = build_descriptor_index(data, pe)
+    _INDEX_CACHE[path] = (key, index)
+    if disk:
+        try:
+            with open(disk, "wb") as fh:
+                pickle.dump(index, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        except OSError:
+            pass
+    return index
+
+
+_INSTANCES: dict = {}
+
+
+def invalidate(path: str) -> None:
+    """Drop the cached view of a file after it has been modified."""
+    inst = _INSTANCES.pop(os.path.abspath(path), None)
+    if inst is not None:
+        inst.close()
+    _INDEX_CACHE.pop(path, None)
+
+
 class AssetFile:
-    """Read-only mmap view of the executable (keeps memory usage low)."""
+    """Mmap view of the executable, reused across opens.
+
+    A 490 MB mmap costs real time to fault in, and the pipeline inspects the same file
+    (and its backup) several times per run, so instances are cached by path.
+    """
+
+    def __new__(cls, path: str):
+        key = os.path.abspath(path)
+        inst = _INSTANCES.get(key)
+        if inst is not None and not inst._closed:
+            return inst
+        inst = super().__new__(cls)
+        _INSTANCES[key] = inst
+        return inst
 
     def __init__(self, path: str):
+        if getattr(self, "_ready", False):
+            return
         self.path = path
+        self._closed = False
         self._fh = open(path, "rb")
         self.data = mmap.mmap(self._fh.fileno(), 0, access=mmap.ACCESS_READ)
         self.pe = parse_pe(self.data)
+        self._index = None
+        self._found = {}
+        self._locate_cache = None
+        self._ready = True
+
+    @property
+    def index(self) -> dict:
+        if self._index is None:
+            self._index = _cached_index(self.path, self.data, self.pe)
+        return self._index
+
+    def locate(self, asset: str) -> dict:
+        cached = self._found.get(asset)
+        if cached is not None:
+            return cached
+
+        if self._locate_cache is None:
+            self._locate_cache = _load_locate_cache(self.path)
+        hint = self._locate_cache.get(asset)
+        if hint:
+            # The descriptor is a stable offset; read the current length from it so a
+            # previously patched file still validates.
+            length = struct.unpack_from("<Q", self.data, hint["desc_off"] + 8)[0]
+            if 16 < length < MAX_ASSET:
+                raw = _try_decompress(self.data, hint["blob_off"], length)
+                if raw is not None:
+                    cached = dict(path_off=hint.get("path_off", 0),
+                                  blob_off=hint["blob_off"],
+                                  desc_off=hint["desc_off"],
+                                  br_len=length, raw=raw)
+                    self._found[asset] = cached
+                    return cached
+
+        # No descriptor index: the pointer search is bounded to one PE section and
+        # costs milliseconds, while building the index scans the whole binary.
+        cached = locate_asset(self.data, self.pe, asset)
+        self._found[asset] = cached
+        self._locate_cache[asset] = dict(path_off=cached["path_off"],
+                                         blob_off=cached["blob_off"],
+                                         desc_off=cached["desc_off"],
+                                         br_len=cached["br_len"])
+        _save_locate_cache(self.path, self._locate_cache)
+        return cached
 
     def close(self):
-        self.data.close()
-        self._fh.close()
+        if getattr(self, "_closed", True):
+            return
+        self._closed = True
+        try:
+            self.data.close()
+        finally:
+            self._fh.close()
+        _INSTANCES.pop(os.path.abspath(self.path), None)
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
-        self.close()
+        # Instances stay open so later steps reuse the same mapping.
+        return False
 
 
 def backup_path(exe: str) -> str:
@@ -192,7 +496,11 @@ def ensure_backup(exe: str) -> str:
     """Create the pristine backup if it does not exist yet. Never overwrites it."""
     bak = backup_path(exe)
     if not os.path.exists(bak):
-        shutil.copy2(exe, bak)
+        size = os.path.getsize(exe)
+        log("creating pristine backup (%.0f MB, one time only)" % (size / 1e6))
+        with heartbeat("  copying"):
+            shutil.copy2(exe, bak)
+        log("backup ready: %s" % bak)
         return "backup created: %s" % bak
     return "backup already present: %s" % bak
 
@@ -214,7 +522,7 @@ def ensure_clean_baseline(exe: str, assets, dry_run=False) -> dict:
     if not os.path.exists(bak):
         with AssetFile(exe) as af:
             for asset in assets:
-                raw = locate_asset(af.data, af.pe, asset)["raw"]
+                raw = af.locate(asset)["raw"]
                 if not _is_pristine(raw):
                     raise ValueError(
                         "%s is already patched but no pristine backup exists at %s. "
@@ -223,7 +531,7 @@ def ensure_clean_baseline(exe: str, assets, dry_run=False) -> dict:
                     )
         if dry_run:
             return {a: "would-create-backup" for a in assets}
-        shutil.copy2(exe, bak)
+        ensure_backup(exe)
         return {a: "backup-created" for a in assets}
 
     if os.path.getsize(exe) != os.path.getsize(bak):
@@ -236,13 +544,13 @@ def ensure_clean_baseline(exe: str, assets, dry_run=False) -> dict:
     restores = []
     with AssetFile(bak) as b_af, AssetFile(exe) as e_af:
         for asset in assets:
-            b = locate_asset(b_af.data, b_af.pe, asset)
+            b = b_af.locate(asset)
             if not _is_pristine(b["raw"]):
                 raise ValueError(
                     "backup %s is not pristine for %s; it cannot be used as a baseline. "
                     "Delete it and reinstall the app." % (bak, asset)
                 )
-            e = locate_asset(e_af.data, e_af.pe, asset)
+            e = e_af.locate(asset)
             if e["blob_off"] != b["blob_off"] or e["desc_off"] != b["desc_off"]:
                 raise ValueError(
                     "asset layout in %s differs from the backup; delete %s and re-install."
@@ -276,6 +584,8 @@ def ensure_clean_baseline(exe: str, assets, dry_run=False) -> dict:
             fh.write(struct.pack("<Q", br_len))
         fh.flush()
         os.fsync(fh.fileno())
+    # The bytes on disk just changed; drop the cached mapping and locate results.
+    invalidate(exe)
     return result
 
 
@@ -283,7 +593,7 @@ def rebaseline(exe: str, assets) -> str:
     """Replace the backup with the current executable (only when it is pristine)."""
     with AssetFile(exe) as af:
         for asset in assets:
-            if not _is_pristine(locate_asset(af.data, af.pe, asset)["raw"]):
+            if not _is_pristine(af.locate(asset)["raw"]):
                 raise ValueError(
                     "%s still contains a patch (%s); run `restore` before re-baselining."
                     % (exe, asset)
@@ -311,38 +621,47 @@ def rewrite_assets(exe: str, edits, dry_run=False, baseline_assets=None) -> list
         if asset not in reset_targets:
             reset_targets.append(asset)
     if not dry_run:
-        # Reset the targets to their pristine bytes first, so a repeated install can
-        # never stack a second payload on top of the first.
+        log("checking pristine baseline (%d assets)" % len(reset_targets))
         baseline = ensure_clean_baseline(exe, reset_targets)
+        log("baseline ready: %s" % ", ".join(
+            "%s=%s" % (k.rsplit("/", 1)[-1], v) for k, v in baseline.items()))
     else:
         baseline = {}
     with AssetFile(exe) as af:
         for asset, transform in edits:
-            found = locate_asset(af.data, af.pe, asset)
+            log("reading %s" % asset)
+            found = af.locate(asset)
             raw_before = found["raw"]
             raw_after = transform(raw_before)
-            packed = compress(raw_after)
-            recompress_before = len(compress(raw_before))
+            if raw_after == raw_before:
+                # Nothing to change (already patched, or transform is a no-op for this
+                # asset). Skip it entirely: rewriting the descriptor here would pair a
+                # stale length with current bytes and corrupt the asset table.
+                log("  unchanged, skipped")
+                continue
+            log("  compressing %d -> %d bytes" % (len(raw_before), len(raw_after)))
+            with heartbeat("  brotli q10 (dots = 1s)"):
+                payload_bytes, quality = compress_fitting(raw_after, found["br_len"])
+            log("  got %d bytes with brotli quality %d" % (len(payload_bytes), quality))
             info = dict(
                 asset=asset,
                 raw_before=len(raw_before),
                 raw_after=len(raw_after),
                 br_before=found["br_len"],
-                br_after=len(packed),
-                br_delta=len(packed) - recompress_before,
-                slack=found["br_len"] - len(packed),
+                br_after=len(payload_bytes),
+                slack=found["br_len"] - len(payload_bytes),
                 blob_off=found["blob_off"],
                 desc_off=found["desc_off"],
-                fits=len(packed) <= found["br_len"],
+                fits=len(payload_bytes) <= found["br_len"],
             )
             if not info["fits"]:
                 raise ValueError(
                     "does not fit: %s needs %d > %d (overflow %d bytes). "
                     "Shorten the payload or use a larger asset."
-                    % (asset, len(packed), found["br_len"],
-                       len(packed) - found["br_len"])
+                    % (asset, len(payload_bytes), found["br_len"],
+                       len(payload_bytes) - found["br_len"])
                 )
-            plan.append(dict(info=info, packed=packed,
+            plan.append(dict(info=info, packed=payload_bytes,
                              old_len=found["br_len"],
                              blob_off=found["blob_off"],
                              desc_off=found["desc_off"]))
@@ -350,8 +669,14 @@ def rewrite_assets(exe: str, edits, dry_run=False, baseline_assets=None) -> list
     if dry_run:
         return [p["info"] for p in plan]
 
+    if not plan:
+        log("nothing to write")
+        return []
+
     assert_writable(exe)
+    log("writing %d asset(s) in one pass" % len(plan))
     backup = ensure_backup(exe)
+    log("backup: %s" % backup)
     try:
         with open(exe, "r+b") as fh:
             for p in plan:
@@ -372,6 +697,9 @@ def rewrite_assets(exe: str, edits, dry_run=False, baseline_assets=None) -> list
     for p in plan:
         p["info"]["backup"] = backup
         p["info"]["baseline"] = baseline.get(p["info"]["asset"], "unknown")
+    _INDEX_CACHE.pop(exe, None)
+    invalidate(exe)
+    log("write complete")
     return [p["info"] for p in plan]
 
 
@@ -379,7 +707,7 @@ def rewrite_assets(exe: str, edits, dry_run=False, baseline_assets=None) -> list
 
 def cmd_stat(exe: str, asset: str):
     with AssetFile(exe) as af:
-        found = locate_asset(af.data, af.pe, asset)
+        found = af.locate(asset)
         recom = compress(found["raw"])
         print(json.dumps({
             "asset": asset,
@@ -407,7 +735,7 @@ def cmd_find(exe: str, substring: str):
             if path not in seen:
                 seen.add(path)
                 try:
-                    found = locate_asset(af.data, af.pe, path)
+                    found = af.locate(path)
                 except Exception:
                     found = None
                 if found:
@@ -421,7 +749,7 @@ def cmd_find(exe: str, substring: str):
 
 def cmd_extract(exe: str, asset: str, out_file=None):
     with AssetFile(exe) as af:
-        found = locate_asset(af.data, af.pe, asset)
+        found = af.locate(asset)
         raw = found["raw"]
     out_file = out_file or os.path.basename(asset) or "asset.bin"
     with open(out_file, "wb") as fh:
@@ -527,7 +855,7 @@ def cmd_status(exe: str, asset: str):
         total = 0
         for candidate in candidates:
             try:
-                found = locate_asset(af.data, af.pe, candidate)
+                found = af.locate(candidate)
             except Exception:
                 continue
             count = found["raw"].count(MARKER.encode())
@@ -537,7 +865,7 @@ def cmd_status(exe: str, asset: str):
         if not total:
             print("chunk     : no payload in %s" % ", ".join(candidates))
         try:
-            html = locate_asset(af.data, af.pe, "index.html")["raw"]
+            html = af.locate("index.html")["raw"]
             lang_zh = b'lang="zh-CN"' in html
         except Exception:
             lang_zh = None
@@ -557,7 +885,7 @@ def cmd_verify(exe: str, assets):
     with AssetFile(exe) as af:
         for asset in assets:
             try:
-                found = locate_asset(af.data, af.pe, asset)
+                found = af.locate(asset)
                 print("OK   %-48s raw=%-8d br=%d" % (asset, len(found["raw"]), found["br_len"]))
                 ok += 1
             except Exception as exc:  # noqa: BLE001 - report and continue

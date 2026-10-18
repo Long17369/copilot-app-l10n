@@ -47,14 +47,32 @@ def wait_until_writable(exe: str, timeout: int) -> bool:
 
 
 def report_state(exe: str, asset: str) -> bool:
+    import apply_zh
+
+    candidates = list(apply_zh.ASSET_CANDIDATES) if asset in ("auto", "", None) else [asset]
     with l10n.AssetFile(exe) as af:
-        found = l10n.locate_asset(af.data, af.pe, asset)
-        has_payload = l10n.MARKER.encode() in found["raw"]
-        html = l10n.locate_asset(af.data, af.pe, "index.html")["raw"]
+        has_payload = False
+        for candidate in candidates:
+            try:
+                found = af.locate(candidate)
+            except Exception:
+                continue
+            if l10n.MARKER.encode() in found["raw"]:
+                print("  chunk %-40s payload present" % candidate)
+                has_payload = True
+        if not has_payload:
+            print("  chunk %-40s payload ABSENT" % "(none)")
+        html = af.locate("index.html")["raw"]
         has_lang = b'lang="zh-CN"' in html
-    print("  chunk %-34s payload %s" % (asset, "present" if has_payload else "absent"))
+        try:
+            entry = af.locate(apply_zh.ENTRY_ASSET)["raw"]
+            has_boot = apply_zh.BOOT_MARKER.encode() in entry
+        except Exception:
+            has_boot = False
     print("  index.html%s lang=\"zh-CN\" %s" % (" " * 23,
                                                 "present" if has_lang else "absent"))
+    print("  entry bootstrap%s %s" % (" " * 17,
+                                      "present" if has_boot else "absent"))
     return has_payload and has_lang
 
 
@@ -75,13 +93,17 @@ def main(argv=None) -> int:
         print("ERROR: executable not found: %s" % args.exe, file=sys.stderr)
         return 1
 
-    payload, infos = apply_zh.apply_patch(args.exe, args.asset, dry_run=True)
-    print("payload: %d bytes" % len(payload))
-    for info in infos:
-        print(json.dumps(info, ensure_ascii=False, indent=2))
-
     if args.dry_run:
+        payload, infos = apply_zh.apply_patch_with_fallback(args.exe, args.asset, dry_run=True)
+        print("payload: %d bytes" % len(payload))
+        for info in infos:
+            print(json.dumps(info, ensure_ascii=False, indent=2))
         print("dry run: nothing written")
+        return 0
+
+    if apply_zh.is_current(args.exe, args.asset):
+        print("已是最新：当前 exe 已经带有这份翻译词库，无需重新打补丁。")
+        print("（改了 i18n/ 下的词典后再运行即可更新。）")
         return 0
 
     for attempt in range(1, args.attempts + 1):
@@ -89,8 +111,10 @@ def main(argv=None) -> int:
             print("ERROR: timed out waiting for the app to close.", file=sys.stderr)
             return 1
         try:
-            # Single open/write window for both assets, so a restart cannot split it.
-            apply_zh.apply_patch(args.exe, args.asset, dry_run=False)
+            l10n.reset_timer()
+            payload, infos = apply_zh.apply_patch_with_fallback(args.exe, args.asset, dry_run=False)
+            for info in infos:
+                print(json.dumps(info, ensure_ascii=False, indent=2))
             break
         except PermissionError as exc:
             print("写入时文件被占用（第 %d/%d 次）：%s" % (attempt, args.attempts, exc))

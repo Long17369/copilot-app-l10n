@@ -39,37 +39,139 @@ ASSET_CANDIDATES = (
     "/assets/App-DxoK3vc2.js",
     "/assets/useWebSocketTransport-Cqgftpse.js",
     "/assets/router-T3TZDMzd.js",
+    "/assets/ExtensionsView-M-L961S-.js",
+    "/assets/switch-cyfgugQG.js",
 )
 DEFAULT_ASSET = "auto"
-MIN_SLACK = 4096
+MIN_SLACK = 1024
+
+# The entry chunk is loaded synchronously by index.html. Appending a tiny import of the
+# payload chunk there makes the translator available from the first paint, even when the
+# payload lives in a chunk the router would otherwise load lazily.
+ENTRY_ASSET = "/assets/index-B4Phv94s.js"
+BOOT_MARKER = "/*__COPILOT_L10N_BOOT__*/"
+
+
+STATE_FILE = os.path.join(BUILD, "last-chunk.json")
+
+
+def _load_state() -> dict:
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(state: dict) -> None:
+    try:
+        os.makedirs(BUILD, exist_ok=True)
+        with open(STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2)
+    except OSError:
+        pass
+
+
+def _remember(exe: str, asset: str) -> None:
+    import hashlib
+
+    state = _load_state()
+    state[exe] = {
+        "asset": asset,
+        "payload_sha": hashlib.sha1(build_payload()).hexdigest(),
+        "exe_size": os.path.getsize(exe),
+    }
+    _save_state(state)
+
+
+def is_current(exe: str, asset: str) -> bool:
+    """True when the executable already carries exactly this payload and wiring."""
+    import hashlib
+
+    state = _load_state()
+    entry = state.get(exe)
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("payload_sha") != hashlib.sha1(build_payload()).hexdigest():
+        return False
+    if entry.get("exe_size") != os.path.getsize(exe):
+        return False
+    chunk = entry.get("asset")
+    if chunk not in ASSET_CANDIDATES:
+        return False
+    with l10n.AssetFile(exe) as af:
+        try:
+            if l10n.MARKER.encode() not in af.locate(chunk)["raw"]:
+                return False
+            if b'lang="zh-CN"' not in af.locate("index.html")["raw"]:
+                return False
+            if chunk != ENTRY_ASSET and \
+                    BOOT_MARKER.encode() not in af.locate(ENTRY_ASSET)["raw"]:
+                return False
+        except (LookupError, KeyError):
+            return False
+    return True
 
 
 def pick_asset(exe: str, payload: bytes) -> str:
-    """Return the first candidate asset that can hold the payload with some margin.
+    """Return the startup chunk to patch.
 
-    Sizes are measured against the *pristine* bytes (from the backup when it exists),
-    so re-running an install does not mistake the previous payload for the original.
+    A previously successful choice is reused without re-measuring (the caller falls back
+    to a fresh scan if it no longer fits). Otherwise candidates are tried biggest-first:
+    headroom scales with chunk size, so the first attempt almost always wins.
     """
+    state = _load_state()
+    remembered = state.get(exe)
+    if isinstance(remembered, dict):
+        remembered = remembered.get("asset")
+    if remembered in ASSET_CANDIDATES:
+        l10n.log("reusing previously chosen chunk: %s" % remembered)
+        return remembered
+
     bak = l10n.backup_path(exe)
     source = bak if os.path.exists(bak) else exe
-    details = []
+    found = []
     with l10n.AssetFile(source) as af:
         for candidate in ASSET_CANDIDATES:
             try:
-                found = l10n.locate_asset(af.data, af.pe, candidate)
+                found.append((candidate, af.locate(candidate)))
             except LookupError:
-                details.append("%s: not found" % candidate)
                 continue
-            packed = l10n.compress(found["raw"] + b"\n" + payload + b"\n")
-            slack = found["br_len"] - len(packed)
-            if slack >= MIN_SLACK:
-                print("asset     : %s (slack %d bytes)" % (candidate, slack))
-                return candidate
-            details.append("%s: slack %d < %d" % (candidate, slack, MIN_SLACK))
+    if not found:
+        raise ValueError("none of the candidate chunks exist in %s" % source)
+
+    found.sort(key=lambda item: -item[1]["br_len"])
+    defects = []
+    for candidate, info in found:
+        l10n.log("measuring %s (%.1f MB)" % (candidate, len(info["raw"]) / 1e6))
+        with l10n.heartbeat("  compressing"):
+            packed, quality = l10n.compress_fitting(
+                info["raw"] + b"\n" + payload + b"\n", info["br_len"] - MIN_SLACK)
+        slack = info["br_len"] - len(packed)
+        if slack >= MIN_SLACK:
+            l10n.log("chosen chunk: %s (slack %d bytes, quality %d)"
+                     % (candidate, slack, quality))
+            _remember(exe, candidate)
+            return candidate
+        defects.append("%s: slack %d < %d" % (candidate, slack, MIN_SLACK))
     raise ValueError(
-        "no startup chunk has room for the payload:\n  " + "\n  ".join(details) +
+        "no startup chunk has room for the payload:\n  " + "\n  ".join(defects) +
         "\nPick another chunk with `copilot_l10n.py list App-` and pass --asset."
     )
+
+
+def bootstrap_transform(asset: str):
+    """Append a static import of `asset` to the entry chunk."""
+    spec = "./" + asset.rsplit("/", 1)[-1]
+
+    def transform(raw: bytes) -> bytes:
+        text = raw.decode("utf-8")
+        if BOOT_MARKER in text:
+            return raw
+        return (text + '\n' + BOOT_MARKER +
+                'import("%s").catch(function(){});\n' % spec).encode("utf-8")
+
+    return transform
 
 
 def load_dictionary() -> dict:
@@ -130,18 +232,39 @@ def make_append_transform(payload: bytes, force: bool):
 
 
 def apply_patch(exe: str, asset: str, dry_run: bool = False, force: bool = False):
-    """Patch the startup chunk and index.html in one write. Returns (payload, infos)."""
+    """Patch the startup chunk, the entry bootstrap and index.html in one write."""
     payload = build_payload()
+    l10n.log("payload: %d bytes" % len(payload))
     if asset in ("auto", "", None):
         asset = pick_asset(exe, payload)
-    infos = l10n.rewrite_assets(
-        exe,
-        [(asset, make_append_transform(payload, force)),
-         ("index.html", index_html_transform)],
-        dry_run,
-        baseline_assets=[a for a in ASSET_CANDIDATES if a != asset],
-    )
+
+    edits = [
+        (asset, make_append_transform(payload, force)),
+        ("index.html", index_html_transform),
+    ]
+    baseline_assets = [a for a in ASSET_CANDIDATES if a != asset]
+    if asset != ENTRY_ASSET:
+        edits.append((ENTRY_ASSET, bootstrap_transform(asset)))
+        baseline_assets = [a for a in baseline_assets if a != ENTRY_ASSET]
+
+    infos = l10n.rewrite_assets(exe, edits, dry_run, baseline_assets=baseline_assets)
+    if not dry_run:
+        _remember(exe, asset)
     return payload, infos
+
+
+def apply_patch_with_fallback(exe: str, asset: str, dry_run: bool = False):
+    """apply_patch, but drop a stale remembered chunk and re-measure if it no longer fits."""
+    try:
+        return apply_patch(exe, asset, dry_run)
+    except ValueError as exc:
+        if "does not fit" not in str(exc) or asset not in ("auto", "", None):
+            raise
+        l10n.log("remembered chunk no longer fits; re-measuring all candidates")
+        state = _load_state()
+        state.pop(exe, None)
+        _save_state(state)
+        return apply_patch(exe, asset, dry_run)
 
 
 def main(argv=None) -> int:
@@ -168,7 +291,11 @@ def main(argv=None) -> int:
     os.makedirs(BUILD, exist_ok=True)
     payload_path = os.path.join(BUILD, "zh-cn.payload.js")
 
-    payload, infos = apply_patch(exe, args.asset, args.dry_run, args.force)
+    if not args.dry_run and is_current(exe, args.asset):
+        print("already up to date: this payload is installed")
+        return 0
+
+    payload, infos = apply_patch_with_fallback(exe, args.asset, args.dry_run)
     with open(payload_path, "wb") as fh:
         fh.write(payload)
     print("payload: %d bytes -> %s" % (len(payload), payload_path))

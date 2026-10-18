@@ -80,7 +80,7 @@ def main() -> int:
         with l10n.AssetFile(exe) as af:
             for asset in ("/assets/App-DxoK3vc2.js", "index.html"):
                 try:
-                    blob += l10n.locate_asset(af.data, af.pe, asset)["raw"]
+                    blob += af.locate(asset)["raw"]
                 except Exception:
                     pass
         missing = [k for k in data if k.encode("utf-8") not in blob]

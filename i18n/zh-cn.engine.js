@@ -212,39 +212,69 @@
     };
 
     /* Ctrl+Alt+L copies every string that had no translation, so gaps can be reported
-     * without opening developer tools. Ctrl+Alt+U re-scans the whole document. */
-    document.addEventListener('keydown', function (event) {
-      if (!event.ctrlKey || !event.altKey) return;
+     * without opening developer tools. Ctrl+Alt+U re-scans the whole document.
+     *
+     * The listener is registered on `window` in the capture phase: React attaches its
+     * own handlers at the root container and often calls stopPropagation(), which would
+     * swallow a bubble-phase listener on `document`.
+     */
+    function onShortcut(event) {
+      if (!event.ctrlKey || !event.altKey || event.metaKey || event.shiftKey) return;
       var key = (event.key || '').toLowerCase();
+      if (!key && event.code) key = event.code.replace('Key', '').toLowerCase();
       if (key === 'u') {
+        event.preventDefault();
+        event.stopPropagation();
         walk(document.body);
+        toast('已重新扫描当前页面');
         return;
       }
       if (key !== 'l') return;
       event.preventDefault();
-      var text = Array.from(misses).sort().join('\n');
+      event.stopPropagation();
+      copyMisses();
+    }
+
+    function toast(message) {
+      var notice = document.createElement('div');
+      notice.textContent = message;
+      notice.setAttribute('data-l10n-skip', '');
+      notice.style.cssText = 'position:fixed;z-index:2147483647;bottom:16px;right:16px;' +
+        'padding:8px 14px;border-radius:6px;background:#1f6feb;color:#fff;' +
+        'font:13px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3)';
+      document.body.appendChild(notice);
+      setTimeout(function () { notice.remove(); }, 2500);
+    }
+
+    function copyMisses() {
+      var list = Array.from(misses).sort();
+      var text = list.join('\n');
       var done = function () {
-        var notice = document.createElement('div');
-        notice.textContent = '已复制 ' + misses.size + ' 条未翻译文案';
-        notice.setAttribute('data-l10n-skip', '');
-        notice.style.cssText = 'position:fixed;z-index:2147483647;bottom:16px;right:16px;' +
-          'padding:8px 14px;border-radius:6px;background:#1f6feb;color:#fff;' +
-          'font:13px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3)';
-        document.body.appendChild(notice);
-        setTimeout(function () { notice.remove(); }, 2500);
+        toast(list.length
+          ? '已复制 ' + list.length + ' 条未翻译文案'
+          : '当前页面没有发现未翻译的英文');
       };
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done, done);
+        navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
       } else {
-        var area = document.createElement('textarea');
-        area.value = text;
-        document.body.appendChild(area);
-        area.select();
-        try { document.execCommand('copy'); } catch (e) { /* ignore */ }
-        area.remove();
+        fallbackCopy(text);
         done();
       }
-    });
+    }
+
+    function fallbackCopy(text) {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('data-l10n-skip', '');
+      area.style.cssText = 'position:fixed;top:-1000px;left:-1000px;';
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+      area.remove();
+    }
+
+    window.addEventListener('keydown', onShortcut, true);
+    document.addEventListener('keydown', onShortcut, true);
 
     if (window.console && console.info) {
       console.info('[copilot-l10n] zh-CN active. Ctrl+Alt+L copies untranslated strings.');
