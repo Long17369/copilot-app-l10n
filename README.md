@@ -40,8 +40,13 @@ cd C:\Users\long1\copilot-l10n
    每 2 秒轮询，退出后自动继续；
 2. 备份到 `github.exe.l10n-bak`（仅首次）；
 3. 把翻译载荷追加到启动时加载的 `assets/App-*.js`，并把 `index.html` 改为 `lang="zh-CN"`；
-4. 重新读取并校验（解压成功、标记存在）；
-5. 启动应用。
+   **两处修改在同一次文件打开中完成**，避免应用中途被重新拉起导致只改了一半；
+4. 若写入瞬间仍被占用，自动重新等待并重试（默认 5 次）；
+5. 重新读取校验，输出 `STATE: INSTALLED`；
+6. 启动应用。
+
+安装是**幂等**的：已经打过补丁的分块会被跳过，只补齐缺失的部分，所以中途失败后
+直接重跑即可。
 
 常用参数：
 
@@ -51,6 +56,13 @@ cd C:\Users\long1\copilot-l10n
 --asset PATH     指定注入的启动分块（默认 /assets/App-DxoK3vc2.js）
 --exe PATH       非默认安装路径
 --timeout 600    等待应用退出的秒数
+--attempts 5     写入被占用时的重试次数
+```
+
+检查当前状态：
+
+```powershell
+.\.venv\Scripts\python.exe copilot_l10n.py status
 ```
 
 ## 回滚
@@ -103,6 +115,7 @@ localStorage.setItem('copilot-l10n', 'off'); location.reload();
 ```powershell
 python copilot_l10n.py stat    "/assets/App-DxoK3vc2.js"   # 尺寸与 headroom
 python copilot_l10n.py find    App-                        # 按子串找资源
+python copilot_l10n.py status                              # 是否已安装
 python copilot_l10n.py extract "/assets/App-DxoK3vc2.js" out.mjs
 python copilot_l10n.py patch   "/assets/App-DxoK3vc2.js" payload.js
 python copilot_l10n.py replace index.html map.json         # { "old": "new" }

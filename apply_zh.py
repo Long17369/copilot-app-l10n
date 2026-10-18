@@ -52,30 +52,38 @@ def build_payload() -> bytes:
     return payload.encode("utf-8")
 
 
-def patch_index_html(exe: str, dry_run: bool) -> dict:
-    def transform(raw: bytes) -> bytes:
-        text = raw.decode("utf-8")
-        if 'lang="zh-CN"' in text:
-            return raw
-        if 'lang="en"' not in text:
-            raise ValueError('index.html has no lang="en" attribute')
-        return text.replace('lang="en"', 'lang="zh-CN"', 1).encode("utf-8")
-
-    return l10n.rewrite_asset(exe, "index.html", transform, dry_run)
+def index_html_transform(raw: bytes) -> bytes:
+    text = raw.decode("utf-8")
+    if 'lang="zh-CN"' in text:
+        return raw
+    if 'lang="en"' not in text:
+        raise ValueError('index.html has no lang="en" attribute')
+    return text.replace('lang="en"', 'lang="zh-CN"', 1).encode("utf-8")
 
 
-def apply_patch(exe: str, asset: str, dry_run: bool = False, force: bool = False):
-    """Patch the startup chunk and index.html. Returns (payload, asset_info, html_info)."""
-    payload = build_payload()
+def make_append_transform(payload: bytes, force: bool):
+    marker = l10n.MARKER.encode()
 
     def append(raw: bytes) -> bytes:
-        if not force and l10n.MARKER.encode() in raw:
+        if marker in raw:
+            if not force:
+                return raw  # already applied: make the install idempotent
             raise ValueError("asset already contains a l10n payload (use --force)")
         return raw + b"\n" + payload + b"\n"
 
-    asset_info = l10n.rewrite_asset(exe, asset, append, dry_run)
-    html_info = patch_index_html(exe, dry_run)
-    return payload, asset_info, html_info
+    return append
+
+
+def apply_patch(exe: str, asset: str, dry_run: bool = False, force: bool = False):
+    """Patch the startup chunk and index.html in one write. Returns (payload, infos)."""
+    payload = build_payload()
+    infos = l10n.rewrite_assets(
+        exe,
+        [(asset, make_append_transform(payload, force)),
+         ("index.html", index_html_transform)],
+        dry_run,
+    )
+    return payload, infos
 
 
 def main(argv=None) -> int:
@@ -102,15 +110,12 @@ def main(argv=None) -> int:
     os.makedirs(BUILD, exist_ok=True)
     payload_path = os.path.join(BUILD, "zh-cn.payload.js")
 
-    print("\n[1/2] %s" % args.asset)
-    payload, info, html_info = apply_patch(exe, args.asset, args.dry_run, args.force)
+    payload, infos = apply_patch(exe, args.asset, args.dry_run, args.force)
     with open(payload_path, "wb") as fh:
         fh.write(payload)
     print("payload: %d bytes -> %s" % (len(payload), payload_path))
-    print(json.dumps(info, ensure_ascii=False, indent=2))
-
-    print("\n[2/2] index.html")
-    print(json.dumps(html_info, ensure_ascii=False, indent=2))
+    for info in infos:
+        print(json.dumps(info, ensure_ascii=False, indent=2))
 
     if not args.dry_run:
         print("\nDone. Restart the app to see the localized UI.")

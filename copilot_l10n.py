@@ -11,6 +11,7 @@ Commands
 --------
     python copilot_l10n.py stat    <asset>
     python copilot_l10n.py find    <substring>
+    python copilot_l10n.py status  [asset]
     python copilot_l10n.py extract <asset> [out-file]
     python copilot_l10n.py patch   <asset> <payload.js>
     python copilot_l10n.py replace <asset> <map.json>
@@ -193,48 +194,72 @@ def ensure_backup(exe: str) -> str:
 
 
 def rewrite_asset(exe: str, asset: str, transform, dry_run=False) -> dict:
+    return rewrite_assets(exe, [(asset, transform)], dry_run)[0]
+
+
+def rewrite_assets(exe: str, edits, dry_run=False) -> list:
+    """Apply several asset edits through a single open handle.
+
+    Writing everything in one `open()` window matters: the app may be relaunched by a
+    watchdog between two separate writes, which would leave a half-applied patch.
+    """
+    plan = []
     with AssetFile(exe) as af:
-        found = locate_asset(af.data, af.pe, asset)
-        raw_before = found["raw"]
-        raw_after = transform(raw_before)
-        packed = compress(raw_after)
-        baseline = len(compress(raw_before))
-        info = dict(
-            asset=asset,
-            raw_before=len(raw_before),
-            raw_after=len(raw_after),
-            br_before=found["br_len"],
-            br_after=len(packed),
-            br_delta=len(packed) - baseline,
-            slack=found["br_len"] - len(packed),
-            blob_off=found["blob_off"],
-            desc_off=found["desc_off"],
-            fits=len(packed) <= found["br_len"],
-        )
-        if not info["fits"]:
-            raise ValueError(
-                "does not fit: %d > %d (overflow %d bytes). "
-                "Shorten the payload or use a larger asset."
-                % (len(packed), found["br_len"], len(packed) - found["br_len"])
+        for asset, transform in edits:
+            found = locate_asset(af.data, af.pe, asset)
+            raw_before = found["raw"]
+            raw_after = transform(raw_before)
+            packed = compress(raw_after)
+            baseline = len(compress(raw_before))
+            info = dict(
+                asset=asset,
+                raw_before=len(raw_before),
+                raw_after=len(raw_after),
+                br_before=found["br_len"],
+                br_after=len(packed),
+                br_delta=len(packed) - baseline,
+                slack=found["br_len"] - len(packed),
+                blob_off=found["blob_off"],
+                desc_off=found["desc_off"],
+                fits=len(packed) <= found["br_len"],
             )
-        if dry_run:
-            return info
-        blob_off = found["blob_off"]
-        old_len = found["br_len"]
-        desc_off = found["desc_off"]
+            if not info["fits"]:
+                raise ValueError(
+                    "does not fit: %s needs %d > %d (overflow %d bytes). "
+                    "Shorten the payload or use a larger asset."
+                    % (asset, len(packed), found["br_len"],
+                       len(packed) - found["br_len"])
+                )
+            plan.append(dict(info=info, packed=packed,
+                             old_len=found["br_len"],
+                             blob_off=found["blob_off"],
+                             desc_off=found["desc_off"]))
+
+    if dry_run:
+        return [p["info"] for p in plan]
 
     assert_writable(exe)
-    info["backup"] = ensure_backup(exe)
-    with open(exe, "r+b") as fh:
-        fh.seek(blob_off)
-        fh.write(packed)
-        if len(packed) < old_len:
-            fh.write(b"\0" * (old_len - len(packed)))
-        fh.seek(desc_off + 8)
-        fh.write(struct.pack("<Q", len(packed)))
-        fh.flush()
-        os.fsync(fh.fileno())
-    return info
+    backup = ensure_backup(exe)
+    try:
+        with open(exe, "r+b") as fh:
+            for p in plan:
+                packed, old_len = p["packed"], p["old_len"]
+                fh.seek(p["blob_off"])
+                fh.write(packed)
+                if len(packed) < old_len:
+                    fh.write(b"\0" * (old_len - len(packed)))
+                fh.seek(p["desc_off"] + 8)
+                fh.write(struct.pack("<Q", len(packed)))
+            fh.flush()
+            os.fsync(fh.fileno())
+    except PermissionError:
+        raise PermissionError(
+            "%s is locked (the app was restarted). Nothing was written; "
+            "close the app and run again." % exe
+        )
+    for p in plan:
+        p["info"]["backup"] = backup
+    return [p["info"] for p in plan]
 
 
 # ------------------------------------------------------------------- commands
@@ -325,6 +350,27 @@ def cmd_replace(exe: str, asset: str, map_file: str, dry_run=False):
     print(json.dumps(info, ensure_ascii=False, indent=2))
 
 
+def cmd_status(exe: str, asset: str):
+    """Report whether the localizer payload / lang attribute are already applied."""
+    with AssetFile(exe) as af:
+        try:
+            found = locate_asset(af.data, af.pe, asset)
+            payload = MARKER.encode() in found["raw"]
+        except Exception as exc:
+            print("chunk     : %s (not found: %s)" % (asset, exc))
+            payload = None
+        try:
+            html = locate_asset(af.data, af.pe, "index.html")["raw"]
+            lang_zh = b'lang="zh-CN"' in html
+        except Exception:
+            lang_zh = None
+    print("chunk     : %s -> payload %s" % (asset, "present" if payload else "absent"))
+    print("index.html: lang=\"zh-CN\" %s" % (
+        "present" if lang_zh else "absent"))
+    installed = payload is True and lang_zh is True
+    print("state     : %s" % ("INSTALLED" if installed else "NOT INSTALLED"))
+
+
 def cmd_verify(exe: str, assets):
     ok = 0
     with AssetFile(exe) as af:
@@ -368,6 +414,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("asset")
     p = sub.add_parser("find", help="list assets whose path matches a substring")
     p.add_argument("substring")
+    p = sub.add_parser("status", help="report whether the localizer is applied")
+    p.add_argument("asset", nargs="?", default="/assets/App-DxoK3vc2.js")
     p = sub.add_parser("extract", help="write the decompressed asset to disk")
     p.add_argument("asset")
     p.add_argument("out", nargs="?")
@@ -396,6 +444,8 @@ def main(argv=None):
         cmd_stat(exe, args.asset)
     elif args.cmd == "find":
         cmd_find(exe, args.substring)
+    elif args.cmd == "status":
+        cmd_status(exe, args.asset)
     elif args.cmd == "extract":
         cmd_extract(exe, args.asset, args.out)
     elif args.cmd == "patch":

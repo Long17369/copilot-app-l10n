@@ -46,6 +46,18 @@ def wait_until_writable(exe: str, timeout: int) -> bool:
     return False
 
 
+def report_state(exe: str, asset: str) -> bool:
+    with l10n.AssetFile(exe) as af:
+        found = l10n.locate_asset(af.data, af.pe, asset)
+        has_payload = l10n.MARKER.encode() in found["raw"]
+        html = l10n.locate_asset(af.data, af.pe, "index.html")["raw"]
+        has_lang = b'lang="zh-CN"' in html
+    print("  chunk %-34s payload %s" % (asset, "present" if has_payload else "absent"))
+    print("  index.html%s lang=\"zh-CN\" %s" % (" " * 23,
+                                                "present" if has_lang else "absent"))
+    return has_payload and has_lang
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Install the zh-CN localizer.")
     parser.add_argument("--exe", default=os.environ.get("COPILOT_EXE", l10n.DEFAULT_EXE))
@@ -54,6 +66,8 @@ def main(argv=None) -> int:
                         help="do not start the app after patching")
     parser.add_argument("--timeout", type=int, default=600,
                         help="seconds to wait for the app to close (default 600)")
+    parser.add_argument("--attempts", type=int, default=5,
+                        help="how many times to retry if the app restarts mid-write")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
@@ -61,26 +75,35 @@ def main(argv=None) -> int:
         print("ERROR: executable not found: %s" % args.exe, file=sys.stderr)
         return 1
 
-    if not args.dry_run and not wait_until_writable(args.exe, args.timeout):
-        print("ERROR: timed out waiting for the app to close.", file=sys.stderr)
-        return 1
-
-    payload, asset_info, html_info = apply_zh.apply_patch(
-        args.exe, args.asset, dry_run=args.dry_run, force=False
-    )
+    payload, infos = apply_zh.apply_patch(args.exe, args.asset, dry_run=True)
     print("payload: %d bytes" % len(payload))
-    print(json.dumps(asset_info, ensure_ascii=False, indent=2))
-    print(json.dumps(html_info, ensure_ascii=False, indent=2))
+    for info in infos:
+        print(json.dumps(info, ensure_ascii=False, indent=2))
 
     if args.dry_run:
         print("dry run: nothing written")
         return 0
 
-    # Validate the result by re-reading the patched executable.
-    with l10n.AssetFile(args.exe) as af:
-        found = l10n.locate_asset(af.data, af.pe, args.asset)
-        assert l10n.MARKER.encode() in found["raw"], "payload marker missing after patch"
-        print("verified: %s decompresses, payload present" % args.asset)
+    for attempt in range(1, args.attempts + 1):
+        if not wait_until_writable(args.exe, args.timeout):
+            print("ERROR: timed out waiting for the app to close.", file=sys.stderr)
+            return 1
+        try:
+            # Single open/write window for both assets, so a restart cannot split it.
+            apply_zh.apply_patch(args.exe, args.asset, dry_run=False)
+            break
+        except PermissionError as exc:
+            print("写入时文件被占用（第 %d/%d 次）：%s" % (attempt, args.attempts, exc))
+            if attempt == args.attempts:
+                print("已放弃。请关闭应用后重新运行本脚本。", file=sys.stderr)
+                return 1
+            print("应用可能被重新拉起，继续等待…")
+
+    print("\n校验结果：")
+    if not report_state(args.exe, args.asset):
+        print("ERROR: 补丁不完整，请重新运行本脚本。", file=sys.stderr)
+        return 1
+    print("STATE: INSTALLED")
 
     print("\n完成。回滚命令：")
     print('  .venv\\Scripts\\python.exe copilot_l10n.py restore --exe "%s"' % args.exe)
