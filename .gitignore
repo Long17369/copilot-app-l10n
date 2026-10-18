@@ -1,0 +1,6 @@
+.venv/
+build/
+__pycache__/
+*.pyc
+*.l10n-bak
+*.log
