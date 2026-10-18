@@ -28,20 +28,75 @@ import copilot_l10n as l10n
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 ENGINE = os.path.join(ROOT, "i18n", "zh-cn.engine.js")
-DICT = os.path.join(ROOT, "i18n", "zh-cn.dict.json")
+I18N_DIR = os.path.join(ROOT, "i18n")
+DICT = os.path.join(I18N_DIR, "zh-cn.dict.json")
 BUILD = os.path.join(ROOT, "build")
 
-# Startup chunk used by the current build. It is loaded by index.html's entry graph
-# (index -> App) and has ~25 KB of Brotli headroom. Override with --asset after an
-# app update changes the hash in the file name.
-DEFAULT_ASSET = "/assets/App-DxoK3vc2.js"
+# Startup chunks loaded by the entry graph, in preference order. The first one with
+# enough Brotli headroom is used; hashes change when the app updates, so
+# `copilot_l10n.py list App-` and `--asset` are the escape hatch.
+ASSET_CANDIDATES = (
+    "/assets/App-DxoK3vc2.js",
+    "/assets/useWebSocketTransport-Cqgftpse.js",
+    "/assets/router-T3TZDMzd.js",
+)
+DEFAULT_ASSET = "auto"
+MIN_SLACK = 4096
+
+
+def pick_asset(exe: str, payload: bytes) -> str:
+    """Return the first candidate asset that can hold the payload with some margin.
+
+    Sizes are measured against the *pristine* bytes (from the backup when it exists),
+    so re-running an install does not mistake the previous payload for the original.
+    """
+    bak = l10n.backup_path(exe)
+    source = bak if os.path.exists(bak) else exe
+    details = []
+    with l10n.AssetFile(source) as af:
+        for candidate in ASSET_CANDIDATES:
+            try:
+                found = l10n.locate_asset(af.data, af.pe, candidate)
+            except LookupError:
+                details.append("%s: not found" % candidate)
+                continue
+            packed = l10n.compress(found["raw"] + b"\n" + payload + b"\n")
+            slack = found["br_len"] - len(packed)
+            if slack >= MIN_SLACK:
+                print("asset     : %s (slack %d bytes)" % (candidate, slack))
+                return candidate
+            details.append("%s: slack %d < %d" % (candidate, slack, MIN_SLACK))
+    raise ValueError(
+        "no startup chunk has room for the payload:\n  " + "\n  ".join(details) +
+        "\nPick another chunk with `copilot_l10n.py list App-` and pass --asset."
+    )
+
+
+def load_dictionary() -> dict:
+    """Merge every dictionary fragment in i18n/, base dictionary first.
+
+    ``zh-cn.dict.json`` is the core list; additional ``*.extra.json`` fragments are
+    layered on top (later files win), which keeps incremental additions reviewable.
+    """
+    files = ["zh-cn.dict.json"]
+    files += sorted(
+        name for name in os.listdir(I18N_DIR)
+        if name.endswith(".extra.json") and name != "zh-cn.dict.json"
+    )
+    merged = {}
+    for name in files:
+        path = os.path.join(I18N_DIR, name)
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", encoding="utf-8") as fh:
+            merged.update(json.load(fh))
+    return merged
 
 
 def build_payload() -> bytes:
     with open(ENGINE, "r", encoding="utf-8") as fh:
         engine = fh.read()
-    with open(DICT, "r", encoding="utf-8") as fh:
-        dictionary = json.load(fh)
+    dictionary = load_dictionary()
 
     if "__DICT_JSON__" not in engine:
         raise ValueError("engine is missing the __DICT_JSON__ placeholder")
@@ -77,11 +132,14 @@ def make_append_transform(payload: bytes, force: bool):
 def apply_patch(exe: str, asset: str, dry_run: bool = False, force: bool = False):
     """Patch the startup chunk and index.html in one write. Returns (payload, infos)."""
     payload = build_payload()
+    if asset in ("auto", "", None):
+        asset = pick_asset(exe, payload)
     infos = l10n.rewrite_assets(
         exe,
         [(asset, make_append_transform(payload, force)),
          ("index.html", index_html_transform)],
         dry_run,
+        baseline_assets=[a for a in ASSET_CANDIDATES if a != asset],
     )
     return payload, infos
 

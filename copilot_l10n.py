@@ -12,6 +12,7 @@ Commands
     python copilot_l10n.py stat    <asset>
     python copilot_l10n.py find    <substring>
     python copilot_l10n.py status  [asset]
+    python copilot_l10n.py list    [pattern]
     python copilot_l10n.py extract <asset> [out-file]
     python copilot_l10n.py patch   <asset> <payload.js>
     python copilot_l10n.py replace <asset> <map.json>
@@ -298,17 +299,21 @@ def rewrite_asset(exe: str, asset: str, transform, dry_run=False) -> dict:
     return rewrite_assets(exe, [(asset, transform)], dry_run)[0]
 
 
-def rewrite_assets(exe: str, edits, dry_run=False) -> list:
+def rewrite_assets(exe: str, edits, dry_run=False, baseline_assets=None) -> list:
     """Apply several asset edits through a single open handle.
 
     Writing everything in one `open()` window matters: the app may be relaunched by a
     watchdog between two separate writes, which would leave a half-applied patch.
     """
     plan = []
+    reset_targets = list(baseline_assets or [])
+    for asset, _transform in edits:
+        if asset not in reset_targets:
+            reset_targets.append(asset)
     if not dry_run:
         # Reset the targets to their pristine bytes first, so a repeated install can
         # never stack a second payload on top of the first.
-        baseline = ensure_clean_baseline(exe, [a for a, _ in edits])
+        baseline = ensure_clean_baseline(exe, reset_targets)
     else:
         baseline = {}
     with AssetFile(exe) as af:
@@ -458,31 +463,93 @@ def cmd_replace(exe: str, asset: str, map_file: str, dry_run=False):
     print(json.dumps(info, ensure_ascii=False, indent=2))
 
 
+def iter_assets(data, pe: dict):
+    """Yield (path, blob_off, br_len) for every embedded asset, using the descriptor table.
+
+    Descriptors are (absolute_pointer, length) qwords; the asset path is stored as a
+    plain string immediately before its compressed blob.
+    """
+    path_chars = set(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/@")
+    image_base = pe["image_base"]
+    # A pointer is 0x0000000140000000+rva, i.e. in little endian the high dword is 0x01.
+    hi = struct.pack("<I", image_base >> 32)
+    seen = set()
+    for sec in pe["sections"]:
+        if sec["raw_size"] < 1024:
+            continue
+        start = sec["raw_ptr"]
+        end = sec["raw_ptr"] + sec["raw_size"] - 16
+        pos = data.find(hi, start, end)
+        while pos != -1:
+            ptr_off = pos - 4
+            if ptr_off >= start and (ptr_off - start) % 8 == 0:
+                ptr = struct.unpack_from("<Q", data, ptr_off)[0]
+                rva = ptr - image_base
+                if 0 < rva < 0x80000000:
+                    blob = file_off_of_rva(pe, rva)
+                    if blob > 0:
+                        length = struct.unpack_from("<Q", data, ptr_off + 8)[0]
+                        if 16 < length < MAX_ASSET and blob + length <= len(data):
+                            s = blob
+                            while s > 0 and blob - s < 240 and data[s - 1] in path_chars:
+                                s -= 1
+                            if s < blob:
+                                path = bytes(data[s:blob]).decode("latin1")
+                                key = (path, blob)
+                                if key not in seen:
+                                    seen.add(key)
+                                    yield path, blob, length
+            pos = data.find(hi, pos + 1, end)
+
+
+def file_off_of_rva(pe: dict, rva: int) -> int:
+    for sec in pe["sections"]:
+        if sec["va"] <= rva < sec["va"] + sec["raw_size"]:
+            return sec["raw_ptr"] + (rva - sec["va"])
+    return -1
+
+
+def cmd_list(exe: str, pattern: str = ""):
+    with AssetFile(exe) as af:
+        rows = [a for a in iter_assets(af.data, af.pe) if pattern in a[0]]
+    rows.sort()
+    for path, _blob, length in rows:
+        print("%-56s br=%d" % (path, length))
+    print("%d asset(s)" % len(rows))
+
+
 def cmd_status(exe: str, asset: str):
     """Report whether the localizer payload / lang attribute are already applied."""
+    import apply_zh  # local import: apply_zh imports this module
+
+    candidates = list(apply_zh.ASSET_CANDIDATES) if asset in ("auto", "", None) else [asset]
     with AssetFile(exe) as af:
-        payload_count = None
-        try:
-            found = locate_asset(af.data, af.pe, asset)
-            payload_count = found["raw"].count(MARKER.encode())
-        except Exception as exc:
-            print("chunk     : %s (not found: %s)" % (asset, exc))
+        total = 0
+        for candidate in candidates:
+            try:
+                found = locate_asset(af.data, af.pe, candidate)
+            except Exception:
+                continue
+            count = found["raw"].count(MARKER.encode())
+            if count:
+                print("chunk     : %s -> payload x%d" % (candidate, count))
+            total += count
+        if not total:
+            print("chunk     : no payload in %s" % ", ".join(candidates))
         try:
             html = locate_asset(af.data, af.pe, "index.html")["raw"]
             lang_zh = b'lang="zh-CN"' in html
         except Exception:
             lang_zh = None
-    print("chunk     : %s -> payload x%s" % (
-        asset, payload_count if payload_count is not None else "?"))
     print("index.html: lang=\"zh-CN\" %s" % ("present" if lang_zh else "absent"))
     bak = backup_path(exe)
     print("backup    : %s (%s)" % (
         bak, "ok" if os.path.exists(bak) else "MISSING"))
-    installed = bool(payload_count) and lang_zh is True
+    installed = bool(total) and lang_zh is True
     print("state     : %s" % ("INSTALLED" if installed else "NOT INSTALLED"))
-    if payload_count and payload_count > 1:
+    if total > 1:
         print("WARNING   : payload applied %d times; run install again to reset the "
-              "baseline and re-apply once." % payload_count)
+              "baseline and re-apply once." % total)
 
 
 def cmd_verify(exe: str, assets):
@@ -529,7 +596,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("find", help="list assets whose path matches a substring")
     p.add_argument("substring")
     p = sub.add_parser("status", help="report whether the localizer is applied")
-    p.add_argument("asset", nargs="?", default="/assets/App-DxoK3vc2.js")
+    p.add_argument("asset", nargs="?", default="auto")
+    p = sub.add_parser("list", help="list every embedded asset (optionally filtered)")
+    p.add_argument("pattern", nargs="?", default="")
     p = sub.add_parser("extract", help="write the decompressed asset to disk")
     p.add_argument("asset")
     p.add_argument("out", nargs="?")
@@ -567,6 +636,8 @@ def main(argv=None):
         cmd_find(exe, args.substring)
     elif args.cmd == "status":
         cmd_status(exe, args.asset)
+    elif args.cmd == "list":
+        cmd_list(exe, args.pattern)
     elif args.cmd == "extract":
         cmd_extract(exe, args.asset, args.out)
     elif args.cmd == "patch":

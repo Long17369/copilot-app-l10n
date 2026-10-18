@@ -35,8 +35,12 @@ def main() -> int:
     parser.add_argument("--exe", default=None)
     args = parser.parse_args()
 
+    sys.path.insert(0, ROOT)
+    import apply_zh
+
     raw = open(DICT_PATH, encoding="utf-8").read()
     data = json.loads(raw)
+    merged = apply_zh.load_dictionary()
 
     problems = 0
     dupes = duplicate_keys(raw)
@@ -53,10 +57,20 @@ def main() -> int:
         elif not value.strip():
             problems += 1
             print("empty translation:", key)
-        elif value == key:
-            print("untranslated (same as key):", key)
 
-    print("%d entries, %d problem(s)" % (len(data), problems))
+    print("base dictionary: %d entries" % len(data))
+    print("merged (base + *.extra.json): %d entries" % len(merged))
+    for name in sorted(os.listdir(os.path.join(ROOT, "i18n"))):
+        if not name.endswith(".extra.json"):
+            continue
+        path = os.path.join(ROOT, "i18n", name)
+        with open(path, encoding="utf-8") as fh:
+            frag = json.load(fh)
+        bad = [k for k, v in frag.items() if not isinstance(v, str) or not v.strip()]
+        print("  %-28s %4d entries%s" % (name, len(frag), "" if not bad else
+                                         "  (%d invalid)" % len(bad)))
+        problems += len(bad)
+    print("%d problem(s)" % problems)
 
     if args.coverage:
         sys.path.insert(0, ROOT)

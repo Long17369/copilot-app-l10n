@@ -210,8 +210,44 @@
     window.__COPILOT_L10N_MISSES__ = function () {
       return Array.from(misses).sort();
     };
+
+    /* Ctrl+Alt+L copies every string that had no translation, so gaps can be reported
+     * without opening developer tools. Ctrl+Alt+U re-scans the whole document. */
+    document.addEventListener('keydown', function (event) {
+      if (!event.ctrlKey || !event.altKey) return;
+      var key = (event.key || '').toLowerCase();
+      if (key === 'u') {
+        walk(document.body);
+        return;
+      }
+      if (key !== 'l') return;
+      event.preventDefault();
+      var text = Array.from(misses).sort().join('\n');
+      var done = function () {
+        var notice = document.createElement('div');
+        notice.textContent = '已复制 ' + misses.size + ' 条未翻译文案';
+        notice.setAttribute('data-l10n-skip', '');
+        notice.style.cssText = 'position:fixed;z-index:2147483647;bottom:16px;right:16px;' +
+          'padding:8px 14px;border-radius:6px;background:#1f6feb;color:#fff;' +
+          'font:13px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3)';
+        document.body.appendChild(notice);
+        setTimeout(function () { notice.remove(); }, 2500);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, done);
+      } else {
+        var area = document.createElement('textarea');
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+        area.remove();
+        done();
+      }
+    });
+
     if (window.console && console.info) {
-      console.info('[copilot-l10n] zh-CN active; call __COPILOT_L10N_MISSES__() for gaps');
+      console.info('[copilot-l10n] zh-CN active. Ctrl+Alt+L copies untranslated strings.');
     }
   }
 

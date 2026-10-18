@@ -111,6 +111,29 @@ cd C:\Users\long1\copilot-l10n
 
 应用更新会把 exe 覆盖回英文，需要重新执行一次。
 
+## 缺少控制台怎么办
+
+应用是 Tauri 打包的发布版，默认没有开发者工具入口。两种办法：
+
+1. **不用控制台**（推荐）：在应用里按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd>，
+   会把你当前界面上**未能翻译**的英文复制到剪贴板，右上角会有提示；
+   直接粘贴给我即可补词典。按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>U</kbd> 可重新扫描当前页面。
+2. **开远程调试**：先完全退出应用，再运行 `launch_debug.cmd`，
+   然后浏览器打开 <http://127.0.0.1:9222> 即可用完整 DevTools；
+   控制台里可执行 `__COPILOT_L10N_MISSES__()`。
+
+## 抓取未翻译文案（自动）
+
+不需要控制台也能从包体里提取英文原文：
+
+```powershell
+.\.venv\Scripts\python.exe tools\harvest_strings.py --missing
+```
+
+输出 `build/ui-strings.txt`（`次数<TAB>原文`）。把需要翻译的条目写进
+`i18n/*.extra.json`（格式 `"English": "中文"`），重新运行 `install_zh.py` 即可；
+`i18n/` 下的所有 `*.extra.json` 会在构建时合并进主词典。
+
 ## 扩展词典
 
 编辑 `i18n/zh-cn.dict.json`（`"英文": "中文"`），重新运行 `install_zh.py` 即可。
@@ -123,7 +146,7 @@ cd C:\Users\long1\copilot-l10n
 .\.venv\Scripts\python.exe tools\dedupe_dict.py           # 自动去重
 ```
 
-查看界面上仍然残留的英文（需要 DevTools 控制台）：
+查看界面上仍然残留的英文（需要 DevTools 控制台，或用上面的快捷键）：
 
 ```js
 __COPILOT_L10N_MISSES__()   // 返回当前未命中的文本
