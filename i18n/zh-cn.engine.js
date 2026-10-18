@@ -1,7 +1,8 @@
 /*__COPILOT_L10N__*/
 /* Simplified-Chinese runtime localizer for the GitHub Copilot desktop WebView.
- * Appended to an app chunk by copilot_l10n.py. Remove with the `restore` command.
+ * Appended to an app chunk by apply_zh.py. Remove with the `restore` command.
  * Disable at runtime: localStorage.setItem('copilot-l10n','off') then reload.
+ * Inspect what is still English: window.__COPILOT_L10N_MISSES__()
  */
 (function () {
   'use strict';
@@ -16,35 +17,63 @@
 
   // Dynamic messages: [regex, replacement]
   var RULES = [
-    [/^(\d+) files?$/, '$1 个文件'],
-    [/^(\d+) folders?$/, '$1 个文件夹'],
-    [/^(\d+) changes?$/, '$1 项更改'],
-    [/^(\d+) comments?$/, '$1 条评论'],
-    [/^(\d+) sessions?$/, '$1 个会话'],
-    [/^(\d+) projects?$/, '$1 个项目'],
-    [/^(\d+) agents?$/, '$1 个代理'],
-    [/^(\d+) repositories$/, '$1 个仓库'],
-    [/^(\d+) selected$/, '已选择 $1 项'],
-    [/^(\d+) more$/, '还有 $1 项'],
-    [/^(\d+) of (\d+)$/, '$1 / $2'],
+    [/^(\d+)\s+files?$/i, '$1 个文件'],
+    [/^(\d+)\s+folders?$/i, '$1 个文件夹'],
+    [/^(\d+)\s+changes?$/i, '$1 项更改'],
+    [/^(\d+)\s+comments?$/i, '$1 条评论'],
+    [/^(\d+)\s+sessions?$/i, '$1 个会话'],
+    [/^(\d+)\s+projects?$/i, '$1 个项目'],
+    [/^(\d+)\s+agents?$/i, '$1 个代理'],
+    [/^(\d+)\s+repositor(y|ies)$/i, '$1 个仓库'],
+    [/^(\d+)\s+messages?$/i, '$1 条消息'],
+    [/^(\d+)\s+results?$/i, '$1 个结果'],
+    [/^(\d+)\s+matches$/i, '$1 个匹配'],
+    [/^(\d+)\s+selected$/i, '已选择 $1 项'],
+    [/^(\d+)\s+items?\s+selected$/i, '已选择 $1 项'],
+    [/^(\d+)\s+more$/i, '还有 $1 项'],
+    [/^(\d+)\s+of\s+(\d+)$/i, '$1 / $2'],
+    [/^show(ing)?\s+(\d+)$/i, '显示 $2 项'],
     [/^just now$/i, '刚刚'],
-    [/^(\d+) seconds? ago$/, '$1 秒前'],
-    [/^(\d+) minutes? ago$/, '$1 分钟前'],
-    [/^(\d+) hours? ago$/, '$1 小时前'],
-    [/^(\d+) days? ago$/, '$1 天前'],
-    [/^(\d+) weeks? ago$/, '$1 周前'],
-    [/^(\d+) months? ago$/, '$1 个月前'],
-    [/^(\d+) years? ago$/, '$1 年前']
+    [/^(\d+)\s*s(ec(onds?)?)?\s+ago$/i, '$1 秒前'],
+    [/^(\d+)\s*m(in(utes?)?)?\s+ago$/i, '$1 分钟前'],
+    [/^(\d+)\s*h(ours?|rs?)?\s+ago$/i, '$1 小时前'],
+    [/^(\d+)\s*d(ays?)?\s+ago$/i, '$1 天前'],
+    [/^(\d+)\s*w(eeks?|ks?)?\s+ago$/i, '$1 周前'],
+    [/^(\d+)\s*mo(nths?)?\s+ago$/i, '$1 个月前'],
+    [/^(\d+)\s*y(ears?|rs?)?\s+ago$/i, '$1 年前'],
+    [/^(in|after)\s+(\d+)\s*(s|sec|seconds?)$/i, '$2 秒后'],
+    [/^(in|after)\s+(\d+)\s*(m|min|minutes?)$/i, '$2 分钟后'],
+    [/^(in|after)\s+(\d+)\s*(h|hours?)$/i, '$2 小时后'],
+    [/^(in|after)\s+(\d+)\s*(d|days?)$/i, '$2 天后'],
+    [/^(\d+)\s*\/\s*(\d+)$/i, '$1 / $2']
   ];
 
-  var ATTRS = ['placeholder', 'title', 'aria-label', 'aria-description', 'aria-placeholder', 'alt'];
+  var ATTRS = [
+    'placeholder',
+    'title',
+    'aria-label',
+    'aria-description',
+    'aria-placeholder',
+    'aria-roledescription',
+    'data-tooltip',
+    'data-tooltip-content',
+    'alt'
+  ];
   var SKIP_SEL = 'pre,code,kbd,samp,textarea,script,style,[contenteditable="true"],.markdown-body,.monaco-editor,[data-l10n-skip]';
 
   var cache = new Map();
-  function translate(key) {
+  var misses = new Set();
+
+  function lookup(key) {
     if (!key) return null;
     if (cache.has(key)) return cache.get(key);
     var out = Object.prototype.hasOwnProperty.call(DICT, key) ? DICT[key] : null;
+    if (out === null) {
+      var trimmed = key.replace(/[:：]\s*$/, '');
+      if (trimmed !== key && Object.prototype.hasOwnProperty.call(DICT, trimmed)) {
+        out = DICT[trimmed] + '：';
+      }
+    }
     if (out === null) {
       for (var i = 0; i < RULES.length; i++) {
         if (RULES[i][0].test(key)) {
@@ -54,22 +83,28 @@
       }
     }
     cache.set(key, out);
+    if (out === null) misses.add(key);
     return out;
+  }
+
+  function translate(key) {
+    return lookup(key);
   }
 
   function localizeTextNode(node) {
     var value = node.nodeValue;
     if (!value || value.length > 400) return;
     var m = /^(\s*)([\s\S]*?)(\s*)$/.exec(value);
+    if (!m) return;
     var key = m[2];
-    if (!key || key.length > 120) return;
+    if (!key || key.length > 160) return;
     var t = translate(key);
     if (t !== null && t !== key) node.nodeValue = m[1] + t + m[3];
   }
 
   function setTranslatedAttribute(el, name, value) {
     var key = value.trim();
-    if (!key || key.length > 120) return;
+    if (!key || key.length > 160) return;
     var t = translate(key);
     if (t !== null && t !== key) el.setAttribute(name, value.replace(key, t));
   }
@@ -82,7 +117,7 @@
     }
     if (el.tagName === 'INPUT') {
       var type = (el.getAttribute('type') || '').toLowerCase();
-      if (type === 'button' || type === 'submit') {
+      if (type === 'button' || type === 'submit' || type === 'reset') {
         var value = el.getAttribute('value');
         if (value) setTranslatedAttribute(el, 'value', value);
       }
@@ -91,6 +126,27 @@
 
   function isSkipped(el) {
     return !!(el.closest && el.closest(SKIP_SEL));
+  }
+
+  /* React renders `{count} files` as two text nodes ("12" + " files"). Translate the
+   * joined form, then blank out the second node so the text is not duplicated. */
+  function localizeJoinedText(root) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      var next = node.nextSibling;
+      if (!next || next.nodeType !== 3) continue;
+      var parent = node.parentElement;
+      if (!parent || isSkipped(parent)) continue;
+      if (!node.nodeValue || node.nodeValue.length > 12) continue;
+      var joined = (node.nodeValue + next.nodeValue).trim();
+      if (joined.length > 160) continue;
+      var t = translate(joined);
+      if (t === null) continue;
+      var lead = /^\s*/.exec(node.nodeValue)[0];
+      node.nodeValue = lead + t;
+      next.nodeValue = '';
+    }
   }
 
   function walk(node) {
@@ -118,6 +174,7 @@
     for (var i = 0; i < all.length; i++) {
       if (!isSkipped(all[i])) localizeAttrs(all[i]);
     }
+    localizeJoinedText(node);
   }
 
   var observer = new MutationObserver(function (mutations) {
@@ -136,7 +193,6 @@
   function start() {
     try {
       document.documentElement.lang = 'zh-CN';
-      if (document.title === 'GitHub Copilot') document.title = 'GitHub Copilot';
     } catch (e) { /* ignore */ }
     walk(document.body || document.documentElement);
     observer.observe(document.documentElement, {
@@ -146,9 +202,17 @@
       attributes: true,
       attributeFilter: ATTRS
     });
-    // Re-apply once the first paint settles (hydration / route mount).
-    setTimeout(function () { walk(document.body); }, 400);
-    setTimeout(function () { walk(document.body); }, 1500);
+    // Re-apply while the first paint settles (hydration / route mount).
+    setTimeout(function () { walk(document.body); }, 300);
+    setTimeout(function () { walk(document.body); }, 1000);
+    setTimeout(function () { walk(document.body); }, 2500);
+
+    window.__COPILOT_L10N_MISSES__ = function () {
+      return Array.from(misses).sort();
+    };
+    if (window.console && console.info) {
+      console.info('[copilot-l10n] zh-CN active; call __COPILOT_L10N_MISSES__() for gaps');
+    }
   }
 
   if (document.readyState === 'loading') {

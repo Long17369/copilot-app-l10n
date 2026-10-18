@@ -25,6 +25,21 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+## 备份与基线（重要）
+
+- 首次安装会把原版 exe 复制为 `github.exe.l10n-bak`，**之后永不覆盖**。
+- 每次打补丁前，脚本都会先把目标资源**还原成备份里的原版字节**，再应用补丁。
+  因此重复安装不会叠加补丁，`status` 里 `payload x1` 才代表正常。
+- 若备份丢失而 exe 已经打过补丁，脚本会**拒绝执行**（无法还原干净基线），
+  此时需重装应用。
+- 应用升级后 exe 大小会与备份不同，脚本会提示；确认新版本是干净的后，用
+  `rebaseline` 把它采纳为新基线：
+
+```powershell
+.\.venv\Scripts\python.exe copilot_l10n.py status
+.\.venv\Scripts\python.exe copilot_l10n.py rebaseline "/assets/App-<新哈希>.js" index.html
+```
+
 ## 安装（应用运行中无法写入 exe）
 
 双击 `install_zh.cmd`，或在外部 PowerShell 中运行：
@@ -101,8 +116,24 @@ cd C:\Users\long1\copilot-l10n
 编辑 `i18n/zh-cn.dict.json`（`"英文": "中文"`），重新运行 `install_zh.py` 即可。
 动态文案的规则在 `i18n/zh-cn.engine.js` 的 `RULES` 中（如 `12 files`、`3 minutes ago`）。
 
+检查词典：
+
+```powershell
+.\.venv\Scripts\python.exe tools\check_dict.py            # 重复键 / 空值
+.\.venv\Scripts\python.exe tools\dedupe_dict.py           # 自动去重
+```
+
+查看界面上仍然残留的英文（需要 DevTools 控制台）：
+
+```js
+__COPILOT_L10N_MISSES__()   // 返回当前未命中的文本
+```
+
+把返回结果补进 `zh-cn.dict.json` 再重装即可。
+
 翻译范围有意避开了聊天正文、代码块、输入框内容（`pre`、`code`、`.markdown-body`、
-`contenteditable`），避免误翻用户内容。
+`contenteditable`），避免误翻用户内容。React 把 `{count} files` 渲染成两个文本节点，
+引擎会合并相邻文本节点后再匹配，因此 `12 files` 这类文案也能翻译。
 
 运行时临时关闭（需要 DevTools）：
 
@@ -120,6 +151,8 @@ python copilot_l10n.py extract "/assets/App-DxoK3vc2.js" out.mjs
 python copilot_l10n.py patch   "/assets/App-DxoK3vc2.js" payload.js
 python copilot_l10n.py replace index.html map.json         # { "old": "new" }
 python copilot_l10n.py verify  "/assets/App-DxoK3vc2.js"
+python copilot_l10n.py baseline "/assets/App-DxoK3vc2.js" index.html
+python copilot_l10n.py rebaseline "/assets/App-DxoK3vc2.js" index.html
 python copilot_l10n.py restore
 ```
 

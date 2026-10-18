@@ -16,6 +16,8 @@ Commands
     python copilot_l10n.py patch   <asset> <payload.js>
     python copilot_l10n.py replace <asset> <map.json>
     python copilot_l10n.py verify  <asset> [<asset> ...]
+    python copilot_l10n.py baseline <asset> ...
+    python copilot_l10n.py rebaseline <asset> ...
     python copilot_l10n.py restore
 
 Options
@@ -186,11 +188,110 @@ def assert_writable(exe: str) -> None:
 
 
 def ensure_backup(exe: str) -> str:
+    """Create the pristine backup if it does not exist yet. Never overwrites it."""
     bak = backup_path(exe)
     if not os.path.exists(bak):
         shutil.copy2(exe, bak)
         return "backup created: %s" % bak
     return "backup already present: %s" % bak
+
+
+def _is_pristine(raw: bytes) -> bool:
+    return MARKER.encode() not in raw and b'lang="zh-CN"' not in raw
+
+
+def ensure_clean_baseline(exe: str, assets, dry_run=False) -> dict:
+    """Guarantee every target asset is at its pristine state before patching.
+
+    The patch is always computed on top of the original (unpatched) bytes, so repeated
+    installs never stack payloads. The pristine bytes come from ``<exe>.l10n-bak``,
+    which is created once and never overwritten.
+    """
+    bak = backup_path(exe)
+    result = {}
+
+    if not os.path.exists(bak):
+        with AssetFile(exe) as af:
+            for asset in assets:
+                raw = locate_asset(af.data, af.pe, asset)["raw"]
+                if not _is_pristine(raw):
+                    raise ValueError(
+                        "%s is already patched but no pristine backup exists at %s. "
+                        "Reinstall the app, or restore it manually, then run again."
+                        % (exe, bak)
+                    )
+        if dry_run:
+            return {a: "would-create-backup" for a in assets}
+        shutil.copy2(exe, bak)
+        return {a: "backup-created" for a in assets}
+
+    if os.path.getsize(exe) != os.path.getsize(bak):
+        raise ValueError(
+            "executable size differs from the backup (%d vs %d): the app was probably "
+            "updated. Delete %s to adopt the new version as the new baseline, then "
+            "re-run." % (os.path.getsize(exe), os.path.getsize(bak), bak)
+        )
+
+    restores = []
+    with AssetFile(bak) as b_af, AssetFile(exe) as e_af:
+        for asset in assets:
+            b = locate_asset(b_af.data, b_af.pe, asset)
+            if not _is_pristine(b["raw"]):
+                raise ValueError(
+                    "backup %s is not pristine for %s; it cannot be used as a baseline. "
+                    "Delete it and reinstall the app." % (bak, asset)
+                )
+            e = locate_asset(e_af.data, e_af.pe, asset)
+            if e["blob_off"] != b["blob_off"] or e["desc_off"] != b["desc_off"]:
+                raise ValueError(
+                    "asset layout in %s differs from the backup; delete %s and re-install."
+                    % (exe, bak)
+                )
+            same_len = e["br_len"] == b["br_len"]
+            if same_len:
+                clean = bytes(b_af.data[b["blob_off"]:b["blob_off"] + b["br_len"]])
+                current = bytes(e_af.data[e["blob_off"]:e["blob_off"] + e["br_len"]])
+                same_len = clean == current
+            if same_len:
+                result[asset] = "pristine"
+            else:
+                restores.append((asset, b["blob_off"], b["br_len"], b["desc_off"]))
+                result[asset] = "restored"
+
+    if not restores:
+        return result
+    if dry_run:
+        return {a: ("would-restore" if a in [r[0] for r in restores] else v)
+                for a, v in result.items()}
+
+    assert_writable(exe)
+    with open(exe, "r+b") as fh:
+        for _asset, blob_off, br_len, desc_off in restores:
+            fh.seek(blob_off)
+            with open(bak, "rb") as bf:
+                bf.seek(blob_off)
+                fh.write(bf.read(br_len))
+            fh.seek(desc_off + 8)
+            fh.write(struct.pack("<Q", br_len))
+        fh.flush()
+        os.fsync(fh.fileno())
+    return result
+
+
+def rebaseline(exe: str, assets) -> str:
+    """Replace the backup with the current executable (only when it is pristine)."""
+    with AssetFile(exe) as af:
+        for asset in assets:
+            if not _is_pristine(locate_asset(af.data, af.pe, asset)["raw"]):
+                raise ValueError(
+                    "%s still contains a patch (%s); run `restore` before re-baselining."
+                    % (exe, asset)
+                )
+    bak = backup_path(exe)
+    if os.path.exists(bak):
+        os.remove(bak)
+    shutil.copy2(exe, bak)
+    return "baseline adopted from %s: %s" % (exe, bak)
 
 
 def rewrite_asset(exe: str, asset: str, transform, dry_run=False) -> dict:
@@ -204,20 +305,26 @@ def rewrite_assets(exe: str, edits, dry_run=False) -> list:
     watchdog between two separate writes, which would leave a half-applied patch.
     """
     plan = []
+    if not dry_run:
+        # Reset the targets to their pristine bytes first, so a repeated install can
+        # never stack a second payload on top of the first.
+        baseline = ensure_clean_baseline(exe, [a for a, _ in edits])
+    else:
+        baseline = {}
     with AssetFile(exe) as af:
         for asset, transform in edits:
             found = locate_asset(af.data, af.pe, asset)
             raw_before = found["raw"]
             raw_after = transform(raw_before)
             packed = compress(raw_after)
-            baseline = len(compress(raw_before))
+            recompress_before = len(compress(raw_before))
             info = dict(
                 asset=asset,
                 raw_before=len(raw_before),
                 raw_after=len(raw_after),
                 br_before=found["br_len"],
                 br_after=len(packed),
-                br_delta=len(packed) - baseline,
+                br_delta=len(packed) - recompress_before,
                 slack=found["br_len"] - len(packed),
                 blob_off=found["blob_off"],
                 desc_off=found["desc_off"],
@@ -259,6 +366,7 @@ def rewrite_assets(exe: str, edits, dry_run=False) -> list:
         )
     for p in plan:
         p["info"]["backup"] = backup
+        p["info"]["baseline"] = baseline.get(p["info"]["asset"], "unknown")
     return [p["info"] for p in plan]
 
 
@@ -353,22 +461,28 @@ def cmd_replace(exe: str, asset: str, map_file: str, dry_run=False):
 def cmd_status(exe: str, asset: str):
     """Report whether the localizer payload / lang attribute are already applied."""
     with AssetFile(exe) as af:
+        payload_count = None
         try:
             found = locate_asset(af.data, af.pe, asset)
-            payload = MARKER.encode() in found["raw"]
+            payload_count = found["raw"].count(MARKER.encode())
         except Exception as exc:
             print("chunk     : %s (not found: %s)" % (asset, exc))
-            payload = None
         try:
             html = locate_asset(af.data, af.pe, "index.html")["raw"]
             lang_zh = b'lang="zh-CN"' in html
         except Exception:
             lang_zh = None
-    print("chunk     : %s -> payload %s" % (asset, "present" if payload else "absent"))
-    print("index.html: lang=\"zh-CN\" %s" % (
-        "present" if lang_zh else "absent"))
-    installed = payload is True and lang_zh is True
+    print("chunk     : %s -> payload x%s" % (
+        asset, payload_count if payload_count is not None else "?"))
+    print("index.html: lang=\"zh-CN\" %s" % ("present" if lang_zh else "absent"))
+    bak = backup_path(exe)
+    print("backup    : %s (%s)" % (
+        bak, "ok" if os.path.exists(bak) else "MISSING"))
+    installed = bool(payload_count) and lang_zh is True
     print("state     : %s" % ("INSTALLED" if installed else "NOT INSTALLED"))
+    if payload_count and payload_count > 1:
+        print("WARNING   : payload applied %d times; run install again to reset the "
+              "baseline and re-apply once." % payload_count)
 
 
 def cmd_verify(exe: str, assets):
@@ -428,6 +542,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("verify", help="verify assets decompress and match descriptors")
     p.add_argument("assets", nargs="+")
     sub.add_parser("restore", help="restore the backup over the executable")
+    p = sub.add_parser("rebaseline",
+                       help="adopt the current (pristine) executable as the new backup")
+    p.add_argument("assets", nargs="+",
+                   help="assets that must be pristine, e.g. index.html")
+    p = sub.add_parser("baseline",
+                       help="check whether the pristine backup is usable")
+    p.add_argument("assets", nargs="+")
     return parser
 
 
@@ -456,6 +577,10 @@ def main(argv=None):
         cmd_verify(exe, args.assets)
     elif args.cmd == "restore":
         cmd_restore(exe)
+    elif args.cmd == "rebaseline":
+        print(rebaseline(exe, args.assets))
+    elif args.cmd == "baseline":
+        print(json.dumps(ensure_clean_baseline(exe, args.assets, dry_run=True), indent=2))
 
 
 if __name__ == "__main__":
