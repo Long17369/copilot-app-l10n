@@ -216,6 +216,22 @@ New session, Ctrl + N. New chat, Ctrl + Shift + N.
 
 `Thought for 11s` → 「思考了 11 秒」，`AI credits quota: 49% used` → 「AI 额度配额：已用 49%」也都是规则处理。
 
+**生成型标签**由规则处理，不需要逐条词条：
+
+```
+Edit shortcut for New tab        → 编辑「New tab」的快捷键
+Assign shortcut for Expand tables → 为「展开表格」分配快捷键
+More actions for Ubuntu-24.04    → 「Ubuntu-24.04」的更多操作
+Ubuntu, view details             → 「Ubuntu」，查看详情
+Models (4)                       → 模型（4）
+Not installed · 696 MB           → 未安装 · 696 MB
+49% quota used                   → 已用配额 49%
+Testing connection, workbuddy    → 正在测试连接：workbuddy
+```
+
+**配色名称保留英文**：58 个主题（`Catppuccin Mocha`、`Tokyo Night`、`Rosé Pine` …）
+登记在 `terminology.json` 的 `keep_english_keys` 里，既不翻译也不上报。
+
 ## 术语与质量检查
 
 ```powershell

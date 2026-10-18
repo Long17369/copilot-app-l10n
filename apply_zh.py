@@ -279,7 +279,11 @@ def build_payload() -> bytes:
     if l10n.MARKER not in engine:
         raise ValueError("engine is missing the l10n marker")
 
-    merged_keep = [w for w in term["keep_english"]]
+    # Both lists are handed to the engine: keep_english covers bare words, and
+    # keep_english_keys covers full strings (palette names, subscription wording).
+    merged_keep = list(term["keep_english"]) + [
+        k for k in term["keep_english_keys"] if k not in term["keep_english"]
+    ]
     payload = engine.replace("__DICT_JSON__",
                              json.dumps(dictionary, ensure_ascii=False))
     payload = payload.replace("__KEEP_JSON__",

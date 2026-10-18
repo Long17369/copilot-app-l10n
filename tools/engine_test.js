@@ -24,6 +24,10 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <span id="composite" title="1 hour ago, Response sent, show timestamp">1 hour ago, Response sent, show timestamp</span>
     <span id="composite2">New session, Ctrl + N. New chat, Ctrl + Shift + N.</span>
     <span id="pathnoise">__WINPATH__</span>
+    <span id="shortcutlabel">Edit shortcut for New tab</span>
+    <span id="palette">Catppuccin Mocha</span>
+    <span id="models">Models (4)</span>
+    <span id="quota">49% quota used</span>
     <div class="untranslated">Totally unknown phrase here</div>
     <div class="conversation-pane">
       <p>Copilot said: three issues fixed.</p>
@@ -89,6 +93,12 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('keep-english term not reported', misses.includes('Skill'), false);
     check('path not reported as gap',
           misses.some((s) => s.indexOf('C:\\') === 0 || s.indexOf('copilot-l10n') >= 0), false);
+
+    check('generated shortcut label', text('#shortcutlabel'), '编辑「New tab」的快捷键');
+    check('palette name kept English', text('#palette'), 'Catppuccin Mocha');
+    check('palette not reported', misses.includes('Catppuccin Mocha'), false);
+    check('count rule with parentheses', text('#models'), '模型（4）');
+    check('quota rule', text('#quota'), '已用配额 49%');
 
     clip = null;
     const ev1 = keyEvent({ ctrlKey: true, altKey: true, key: 'Unidentified', code: 'KeyL' });

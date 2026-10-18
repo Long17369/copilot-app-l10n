@@ -70,7 +70,29 @@
     [/^[,，]\s*starting$/i, '，正在启动'],
     [/^[,，]\s*no project$/i, '，无项目'],
     [/^[,，]\s*model,?\s*required$/i, '，模型（必填）'],
-    [/^[,，]\s*preview$/i, '，预览']
+    [/^[,，]\s*preview$/i, '，预览'],
+    /* Shortcut manager and other generated labels. */
+    [/^Edit shortcut for\s+(.+)$/i, '编辑「$1」的快捷键'],
+    [/^Assign shortcut for\s+(.+)$/i, '为「$1」分配快捷键'],
+    [/^Edit shortcut\b/i, '编辑快捷键'],
+    [/^More actions for\s+(.+)$/i, '「$1」的更多操作'],
+    [/^Assign…$/i, '分配…'],
+    [/^without shortcut$/i, '无快捷键'],
+    [/^(.+),\s*view details$/i, '「$1」，查看详情'],
+    [/^Models\s*\((\d+)\)$/i, '模型（$1）'],
+    [/^Not installed\s*·\s*(.+)$/i, '未安装 · $1'],
+    [/^Not installed\s*·\s*(\d+\s*MB)$/i, '未安装 · $1'],
+    [/^Search\s+(\d+)\s+palettes…$/i, '搜索 $1 个配色…'],
+    [/^Testing connection,\s*(.+)$/i, '正在测试连接：$1'],
+    [/^Model provider status checked:\s*(\d+)\s+connected\.$/i,
+      '模型提供方状态已检查：$1 个已连接。'],
+    [/^(\d+)%\s+quota used$/i, '已用配额 $1%'],
+    [/^Last\s+(\d+)\s+days$/i, '最近 $1 天'],
+    [/^(\d+)\s+days$/i, '$1 天'],
+    [/^\(resets monthly\)$/i, '（每月重置）'],
+    [/^Edit\s+([\w.\-]+\/[\w.\-]+)$/, '编辑 $1'],
+    [/^Remove\s+([\w.\-]+\/[\w.\-]+)$/, '移除 $1'],
+    [/^Remove\s+([a-z0-9][\w.\-]*)$/i, '移除 $1']
   ];
 
   var ATTRS = [
