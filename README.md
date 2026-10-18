@@ -156,6 +156,37 @@ npm test               # 17 项：文本/属性/复数合并/短路/徽标/快�
 `i18n/*.extra.json`（格式 `"English": "中文"`），重新运行 `install_zh.py` 即可；
 `i18n/` 下的所有 `*.extra.json` 会在构建时合并进主词典。
 
+## 术语与质量检查
+
+```powershell
+.\.venv\Scripts\python.exe tools\check_dict.py     # 重复键 / 空值 / 各分片条目数
+.\.venv\Scripts\python.exe tools\audit_terms.py    # 术语冲突 / 标点规范 / 一译多名
+```
+
+`audit_terms.py` 会检查三类问题：
+
+1. **同义词冲突**：同一个英文词出现两种译法（如 `Session` 混用「会话/对话」，
+   `Repository` 混用「仓库/存储库」）；
+2. **标点规范**：标签不该以「。」结尾、`...` 应写作 `…`、中文后应用全角「：」；
+3. **一译多名**：同一个短中文被多个不同英文词共用（如「设置」同时对应
+   `Settings` 和 `Setup`），这类会造成语义混淆。
+
+已统一的术语（`i18n/zz-consistency.extra.json` 可覆盖）：
+
+| 英文 | 统一译法 | 不使用 |
+|---|---|---|
+| Session | 会话 | 对话 |
+| Issue | 议题 | 问题 |
+| Repository | 仓库 | 存储库 |
+| Review | 审核 | 审查 |
+| Agent | 代理 | 智能体 |
+| Workspace | 工作区 | 工作空间 |
+| Usage | 用量 | 使用量 |
+| Prompt | 提示词 | 提示语 |
+| Terminal | 终端 | 命令行 |
+| Setup | 配置 | 设置 |
+| Proxy | 代理服务器 | 代理 |
+
 ## 性能
 
 | 场景 | 耗时 |
