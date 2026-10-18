@@ -1,0 +1,54 @@
+{
+  "_comment": "Terminology policy applied when the payload is built. keep_english leaves the word untranslated; rewrite replaces a Chinese rendering inside translated sentences; overrides pins an exact English key to a specific Chinese string.",
+  "keep_english": [
+    "skill",
+    "skills",
+    "issue",
+    "issues",
+    "agent",
+    "agents"
+  ],
+  "rewrite": [
+    {
+      "from": "议题",
+      "to": "Issue"
+    },
+    {
+      "from": "代理",
+      "to": "Agent",
+      "skip_if_contains": [
+        "代理服务器"
+      ]
+    },
+    {
+      "from": "技能",
+      "to": "Skill"
+    }
+  ],
+  "keep_english_keys": [
+    "Copilot plan",
+    "Enterprise plan",
+    "Subscription plan"
+  ],
+  "overrides": {
+    "Background": "后台",
+    "Background color": "背景颜色",
+    "Background colour": "背景颜色",
+    "Preview background": "预览背景",
+    "Set the background": "设置背景",
+    "Run in background": "在后台运行",
+    "Continue in background": "在后台继续",
+    "Keep running in background": "在后台继续运行",
+    "Move to background": "移到后台",
+    "Run in the background": "在后台运行",
+    "Works in the background": "在后台工作",
+    "Background tasks": "后台任务",
+    "Background activity": "后台活动",
+    "Manage plan": "管理 plan",
+    "Change plan": "更改 plan",
+    "Compare plans": "比较 plan",
+    "Upgrade plan": "升级 plan",
+    "Open your plan's usage and rate limits.": "查看你的 plan 用量与速率限制。",
+    "Proxy": "代理"
+  }
+}

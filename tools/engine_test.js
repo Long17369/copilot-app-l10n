@@ -19,6 +19,8 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <span><span>3</span><span> files</span></span>
     <span id="count">3<!-- --> files</span>
     <code>New session</code>
+    <span id="skill">Skill</span>
+    <span id="newissue">New issue</span>
     <div class="untranslated">Totally unknown phrase here</div>
   </aside>
 </body></html>`;
@@ -53,6 +55,8 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('count + noun (comment-separated nodes)',
           window.document.getElementById('count').textContent, '3 个文件');
     check('code block untouched', text('code'), 'New session');
+    check('keep-english term untouched', text('#skill'), 'Skill');
+    check('keep-english inside sentence', text('#newissue'), '新建 Issue');
     check('unknown left alone', text('.untranslated'), 'Totally unknown phrase here');
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
@@ -62,6 +66,7 @@ window.document.addEventListener('DOMContentLoaded', () => {
     const misses = window.__COPILOT_L10N_MISSES__();
     check('no chinese in gap list', misses.some((s) => /[\u4e00-\u9fff]/.test(s)), false);
     check('gap list has the unknown string', misses.includes('Totally unknown phrase here'), true);
+    check('keep-english term not reported', misses.includes('Skill'), false);
 
     clip = null;
     const ev1 = keyEvent({ ctrlKey: true, altKey: true, key: 'Unidentified', code: 'KeyL' });

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 import copilot_l10n as l10n
@@ -174,11 +175,82 @@ def bootstrap_transform(asset: str):
     return transform
 
 
+TERMINOLOGY_PATH = os.path.join(I18N_DIR, "terminology.json")
+
+
+def load_terminology() -> dict:
+    try:
+        with open(TERMINOLOGY_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data = {}
+    data.setdefault("keep_english", [])
+    data.setdefault("rewrite", [])
+    data.setdefault("keep_english_keys", [])
+    data.setdefault("overrides", {})
+    return data
+
+
+CJK_LATIN = re.compile(r"([\u4e00-\u9fff])([A-Za-z0-9])")
+LATIN_CJK = re.compile(r"([A-Za-z0-9])([\u4e00-\u9fff])")
+
+
+def normalize_spacing(text: str) -> str:
+    """Put a space between Chinese and Latin/digits, as Chinese typography expects."""
+    out = CJK_LATIN.sub(r"\1 \2", text)
+    out = LATIN_CJK.sub(r"\1 \2", out)
+    return re.sub(r" {2,}", " ", out)
+
+
+def apply_terminology(dictionary: dict, term: dict) -> dict:
+    """Enforce the terminology policy on a merged dictionary.
+
+    Order matters: exact overrides win, then terms that must stay English are removed,
+    then Chinese renderings are rewritten inside the remaining sentences.
+    """
+    keep_keys = {k.strip().lower() for k in term["keep_english_keys"]}
+    keep_words = {w.strip().lower() for w in term["keep_english"]}
+
+    out = {}
+    pinned = set(term["overrides"])
+    for en, zh in dictionary.items():
+        if en in term["overrides"]:
+            out[en] = normalize_spacing(term["overrides"][en])
+            continue
+        # A bare term that must stay English is dropped so the source text is used.
+        if en.strip().lower() in keep_words:
+            continue
+        if en.strip().lower() in keep_keys:
+            continue
+        out[en] = zh
+
+    for en, zh in list(out.items()):
+        if en in pinned:
+            continue
+        value = zh
+        for rule in term["rewrite"]:
+            if not isinstance(rule, dict):
+                continue
+            source = rule.get("from")
+            target = rule.get("to")
+            if not source or not target or source not in value:
+                continue
+            skip = rule.get("skip_if_contains") or []
+            if any(token in value for token in skip):
+                continue
+            value = value.replace(source, target)
+        value = normalize_spacing(value)
+        if value != zh:
+            out[en] = value
+    return out
+
+
 def load_dictionary() -> dict:
     """Merge every dictionary fragment in i18n/, base dictionary first.
 
     ``zh-cn.dict.json`` is the core list; additional ``*.extra.json`` fragments are
     layered on top (later files win), which keeps incremental additions reviewable.
+    The terminology policy is applied last so it always wins.
     """
     files = ["zh-cn.dict.json"]
     files += sorted(
@@ -192,20 +264,26 @@ def load_dictionary() -> dict:
             continue
         with open(path, "r", encoding="utf-8") as fh:
             merged.update(json.load(fh))
-    return merged
+    return apply_terminology(merged, load_terminology())
 
 
 def build_payload() -> bytes:
     with open(ENGINE, "r", encoding="utf-8") as fh:
         engine = fh.read()
+    term = load_terminology()
     dictionary = load_dictionary()
 
-    if "__DICT_JSON__" not in engine:
-        raise ValueError("engine is missing the __DICT_JSON__ placeholder")
+    for placeholder in ("__DICT_JSON__", "__KEEP_JSON__"):
+        if placeholder not in engine:
+            raise ValueError("engine is missing the %s placeholder" % placeholder)
     if l10n.MARKER not in engine:
         raise ValueError("engine is missing the l10n marker")
 
-    payload = engine.replace("__DICT_JSON__", json.dumps(dictionary, ensure_ascii=False))
+    merged_keep = [w for w in term["keep_english"]]
+    payload = engine.replace("__DICT_JSON__",
+                             json.dumps(dictionary, ensure_ascii=False))
+    payload = payload.replace("__KEEP_JSON__",
+                              json.dumps(merged_keep, ensure_ascii=False))
     return payload.encode("utf-8")
 
 

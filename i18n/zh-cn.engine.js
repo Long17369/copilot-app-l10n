@@ -14,6 +14,15 @@
   window.__COPILOT_L10N_ZH__ = true;
 
   var DICT = __DICT_JSON__;
+  /* Terms that stay in English on purpose (skill, issue, agent, ...). They must not be
+   * translated nor reported as missing. */
+  var KEEP = __KEEP_JSON__;
+
+  var KEEP_SET = new Set(KEEP.map(function (w) { return w.toLowerCase(); }));
+  var KEEP_JOINED = new Set(
+    KEEP.map(function (w) { return w.toLowerCase(); })
+      .concat(KEEP.map(function (w) { return w.toLowerCase() + 's'; }))
+  );
 
   // Dynamic messages: [regex, replacement]
   var RULES = [
@@ -23,8 +32,10 @@
     [/^(\d+)\s+comments?$/i, '$1 条评论'],
     [/^(\d+)\s+sessions?$/i, '$1 个会话'],
     [/^(\d+)\s+projects?$/i, '$1 个项目'],
-    [/^(\d+)\s+agents?$/i, '$1 个代理'],
+    [/^(\d+)\s+agents?$/i, '$1 个 Agent'],
     [/^(\d+)\s+repositor(y|ies)$/i, '$1 个仓库'],
+    [/^(\d+)\s+skills?$/i, '$1 个 Skill'],
+    [/^(\d+)\s+issues?$/i, '$1 个 Issue'],
     [/^(\d+)\s+messages?$/i, '$1 条消息'],
     [/^(\d+)\s+results?$/i, '$1 个结果'],
     [/^(\d+)\s+matches$/i, '$1 个匹配'],
@@ -78,6 +89,8 @@
 
   function lookup(key) {
     if (!key) return null;
+    // Deliberately untranslated vocabulary: keep the English word as-is.
+    if (KEEP_SET.has(key.trim().toLowerCase())) return null;
     if (cache.has(key)) return cache.get(key);
     var out = Object.prototype.hasOwnProperty.call(DICT, key) ? DICT[key] : null;
     if (out === null) {

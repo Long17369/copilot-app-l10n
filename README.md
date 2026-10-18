@@ -156,6 +156,41 @@ npm test               # 17 项：文本/属性/复数合并/短路/徽标/快�
 `i18n/*.extra.json`（格式 `"English": "中文"`），重新运行 `install_zh.py` 即可；
 `i18n/` 下的所有 `*.extra.json` 会在构建时合并进主词典。
 
+## 术语策略（`i18n/terminology.json`）
+
+词条不是逐条硬编码，而是先合并词典、再套用一份术语策略，策略永远最后生效：
+
+```json
+{
+  "keep_english": ["skill", "issue", "agent"],
+  "rewrite": [
+    { "from": "议题", "to": "Issue" },
+    { "from": "代理", "to": "Agent", "skip_if_contains": ["代理服务器"] }
+  ],
+  "keep_english_keys": ["Copilot plan", "Enterprise plan"],
+  "overrides": { "Background": "后台", "Proxy": "代理" }
+}
+```
+
+- `keep_english`：这些词**保留英文**，既不翻译也不计入"未翻译"清单
+- `rewrite`：把已翻译句子里的旧译法替换成保留词，并自动补中英文之间的空格
+- `keep_english_keys`：整条文案保留英文（如订阅相关的 `Copilot plan`）
+- `overrides`：精确指定某条英文的译法，优先级最高
+
+当前策略：
+
+| 英文 | 处理 |
+|---|---|
+| Skill / Skills | 保留英文（`New skill` → 「新建 Skill」） |
+| Issue / Issues | 保留英文（`New issue` → 「新建 Issue」） |
+| Agent / Agents | 保留英文（`New agent` → 「新建 Agent」） |
+| plan（订阅） | 保留英文（`Manage plan` → 「管理 plan」） |
+| Plan（模式） | 译作「计划」 |
+| Background | 「后台」；颜色类语境用 override 指定「背景」 |
+| Proxy | 「代理」 |
+
+要再调整，改完 `terminology.json` 重新运行 `install_zh.py` 即可，不需要动词典文件。
+
 ## 术语与质量检查
 
 ```powershell

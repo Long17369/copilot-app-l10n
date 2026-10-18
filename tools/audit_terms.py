@@ -28,10 +28,10 @@ import apply_zh  # noqa: E402
 # term -> (canonical rendering, renderings that must not appear next to that term)
 SYNONYMS = {
     "session": ("会话", ["对话"]),
-    "issue": ("议题", ["问题"]),
+    "issue": ("Issue", ["议题", "问题"]),
     "repository": ("仓库", ["存储库", "版本库"]),
     "review": ("审核", ["审查", "评审"]),
-    "agent": ("代理", ["智能体"]),
+    "agent": ("Agent", ["代理", "智能体"]),
     "workspace": ("工作区", ["工作空间"]),
     "usage": ("用量", ["使用量"]),
     "setting": ("设置", ["设定", "首选项"]),
@@ -46,7 +46,7 @@ SYNONYMS = {
     "plugin": ("插件", ["扩展"]),
     "commit": ("提交", ["commit"]),
     "branch": ("分支", ["branch"]),
-    "skill": ("技能", ["技巧"]),
+    "skill": ("Skill", ["技能", "技巧"]),
     "merge": ("合并", ["归并"]),
 }
 
