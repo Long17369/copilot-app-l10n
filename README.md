@@ -191,6 +191,27 @@ npm test               # 17 项：文本/属性/复数合并/短路/徽标/快�
 
 要再调整，改完 `terminology.json` 重新运行 `install_zh.py` 即可，不需要动词典文件。
 
+## 缺口清单为什么会有"噪音"
+
+`Ctrl+Alt+L` / 「译 N」徽标复制的清单已经过滤掉这些内容：
+
+- 文件路径（`C:\...`、`/usr/...`）、文件名（`*.js`/`*.md` …）
+- 快捷键标签（`Ctrl + N`、`Control + Enter` …）
+- 常量名、哈希、`owner/repo`、camelCase 标识符
+- 已翻译的中文、代码块与聊天正文
+
+**组合标签**会被拆开逐段翻译，分隔符转成中文标点：
+
+```
+1 hour ago, Response sent, show timestamp
+→ 1 小时前，回复已发送，显示时间戳
+
+New session, Ctrl + N. New chat, Ctrl + Shift + N.
+→ 新建会话，Ctrl + N。新建对话，Ctrl + Shift + N。
+```
+
+`Thought for 11s` → 「思考了 11 秒」，`AI credits quota: 49% used` → 「AI 额度配额：已用 49%」也都是规则处理。
+
 ## 术语与质量检查
 
 ```powershell

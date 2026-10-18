@@ -52,6 +52,10 @@
     [/^(\d+)\s*w(eeks?|ks?)?\s+ago$/i, '$1 周前'],
     [/^(\d+)\s*mo(nths?)?\s+ago$/i, '$1 个月前'],
     [/^(\d+)\s*y(ears?|rs?)?\s+ago$/i, '$1 年前'],
+    [/^Thought for\s+([\d.]+)s$/i, '思考了 $1 秒'],
+    [/^Thought for\s+(\d+)m\s*(\d+)s$/i, '思考了 $1 分 $2 秒'],
+    [/^Thinking for\s+([\d.]+)s$/i, '思考了 $1 秒'],
+    [/^AI credits quota:\s*(\d+)%\s*used$/i, 'AI 额度配额：已用 $1%'],
     [/^(in|after)\s+(\d+)\s*(s|sec|seconds?)$/i, '$2 秒后'],
     [/^(in|after)\s+(\d+)\s*(m|min|minutes?)$/i, '$2 分钟后'],
     [/^(in|after)\s+(\d+)\s*(h|hours?)$/i, '$2 小时后'],
@@ -87,7 +91,36 @@
   var badgeTimer = null;
   var updateBadge = null;
 
-  function lookup(key) {
+  /* Strings that are never worth reporting as "untranslated": paths, shortcuts,
+   * identifiers and code fragments. Without this the gap list fills up with file
+   * paths and key combinations copied from tool panels. */
+  var MISS_NOISE = [
+    /^[A-Za-z]:[\\/]/,                                  // C:\...
+    /^\.{0,2}\//,                                       // /usr/..., ./src
+    /^(Ctrl|Control|Alt|Shift|Cmd|Meta|⌘|Option)\b/i,   // shortcut labels
+    /^[\w.-]+\.(js|mjs|ts|tsx|jsx|py|md|json|exe|cmd|bat|txt|yml|yaml|css|html)$/i,
+    /^[A-Z_]{3,}$/,                                     // CONSTANTS
+    /^[0-9a-f]{7,}$/i,                                  // hashes
+    /^[\w-]+\/[\w-]+$/,                                 // owner/repo-ish
+    /^[a-z]+[A-Z]\w+$/,                                 // camelCase identifiers
+  ];
+
+  function isNoise(text) {
+    for (var i = 0; i < MISS_NOISE.length; i++) {
+      if (MISS_NOISE[i].test(text)) return true;
+    }
+    return false;
+  }
+
+  function recordMiss(key) {
+    var probe = key.trim();
+    if (!probe) return;
+    if (!/^[A-Z]/.test(probe) && !/\s/.test(probe)) return;
+    if (isNoise(probe)) return;
+    misses.add(key);
+  }
+
+  function lookup(key, quiet) {
     if (!key) return null;
     // Deliberately untranslated vocabulary: keep the English word as-is.
     if (KEEP_SET.has(key.trim().toLowerCase())) return null;
@@ -108,17 +141,55 @@
       }
     }
     cache.set(key, out);
-    if (out === null) {
-      // Only sentence- or label-shaped strings are worth reporting; single lowercase
-      // fragments ("files", "px") are layout noise, not missing translations.
-      var probe = key.trim();
-      if (/^[A-Z]/.test(probe) || /\s/.test(probe)) misses.add(key);
-    }
+    if (out === null && !quiet) recordMiss(key);
     return out;
   }
 
+  /* Accessible labels and hints are assembled from several parts, e.g.
+   * "1 hour ago, Response sent, show timestamp" or
+   * "New session, Ctrl + N. New chat, Ctrl + Shift + N.".
+   * Translate such a string part by part, keeping separators in Chinese form. */
+  function translateComposite(key) {
+    if (key.length > 240) return null;
+    var pieces = key.split(/(,\s+|\.\s+|;\s+)/);
+    if (pieces.length < 3) return null;
+
+    var out = '';
+    var changed = false;
+    for (var i = 0; i < pieces.length; i++) {
+      var piece = pieces[i];
+      if (i % 2 === 1) {
+        var sep = piece.charAt(0);
+        out += sep === ',' ? '，' : (sep === '.' ? '。' : '；');
+        continue;
+      }
+      var core = piece.trim();
+      if (!core) continue;
+      var hasDot = /\.$/.test(core);
+      var probe = hasDot ? core.slice(0, -1) : core;
+      var t = lookup(probe, true);
+      if (t === null) {
+        out += core;
+      } else {
+        out += t;
+        changed = true;
+      }
+    }
+    return changed ? out : null;
+  }
+
   function translate(key) {
-    return lookup(key);
+    // Deliberately untranslated vocabulary is neither translated nor reported.
+    if (KEEP_SET.has(key.trim().toLowerCase())) return null;
+    var out = lookup(key, true);
+    if (out !== null) return out;
+    out = translateComposite(key);
+    if (out !== null) {
+      cache.set(key, out);
+      return out;
+    }
+    recordMiss(key);
+    return null;
   }
 
   var HAS_LATIN = /[A-Za-z]/;

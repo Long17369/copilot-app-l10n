@@ -21,9 +21,12 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <code>New session</code>
     <span id="skill">Skill</span>
     <span id="newissue">New issue</span>
+    <span id="composite" title="1 hour ago, Response sent, show timestamp">1 hour ago, Response sent, show timestamp</span>
+    <span id="composite2">New session, Ctrl + N. New chat, Ctrl + Shift + N.</span>
+    <span id="pathnoise">__WINPATH__</span>
     <div class="untranslated">Totally unknown phrase here</div>
   </aside>
-</body></html>`;
+</body></html>`.replace('__WINPATH__', String.raw`C:\Users\long1\copilot-l10n\README.md`);
 
 const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
 const { window } = dom;
@@ -57,6 +60,9 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('code block untouched', text('code'), 'New session');
     check('keep-english term untouched', text('#skill'), 'Skill');
     check('keep-english inside sentence', text('#newissue'), '新建 Issue');
+    check('composite label', text('#composite'), '1 小时前，回复已发送，显示时间戳');
+    check('composite with two separators', text('#composite2'),
+          '新建会话，Ctrl + N。新建对话，Ctrl + Shift + N.');
     check('unknown left alone', text('.untranslated'), 'Totally unknown phrase here');
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
@@ -67,6 +73,8 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('no chinese in gap list', misses.some((s) => /[\u4e00-\u9fff]/.test(s)), false);
     check('gap list has the unknown string', misses.includes('Totally unknown phrase here'), true);
     check('keep-english term not reported', misses.includes('Skill'), false);
+    check('path not reported as gap',
+          misses.some((s) => s.indexOf('C:\\') === 0 || s.indexOf('copilot-l10n') >= 0), false);
 
     clip = null;
     const ev1 = keyEvent({ ctrlKey: true, altKey: true, key: 'Unidentified', code: 'KeyL' });
@@ -88,6 +96,9 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('shortcut fired (event.key fallback)', clip !== null, true);
 
     let failed = 0;
+    if (results.some((r) => !r[0])) {
+      console.log('misses for debugging:', JSON.stringify(misses, null, 2));
+    }
     for (const [ok, name, got, want] of results) {
       if (!ok) failed++;
       console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : `  got=${JSON.stringify(got)} want=${JSON.stringify(want)}`}`);
