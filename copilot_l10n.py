@@ -40,6 +40,7 @@ Notes
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import json
 import mmap
@@ -627,44 +628,58 @@ def rewrite_assets(exe: str, edits, dry_run=False, baseline_assets=None) -> list
             "%s=%s" % (k.rsplit("/", 1)[-1], v) for k, v in baseline.items()))
     else:
         baseline = {}
+
+    pending = []
     with AssetFile(exe) as af:
         for asset, transform in edits:
             log("reading %s" % asset)
             found = af.locate(asset)
-            raw_before = found["raw"]
-            raw_after = transform(raw_before)
-            if raw_after == raw_before:
-                # Nothing to change (already patched, or transform is a no-op for this
-                # asset). Skip it entirely: rewriting the descriptor here would pair a
-                # stale length with current bytes and corrupt the asset table.
+            raw_after = transform(found["raw"])
+            if raw_after == found["raw"]:
+                # Nothing to change (already patched, or the transform is a no-op here).
+                # Rewriting the descriptor would pair a stale length with current bytes.
                 log("  unchanged, skipped")
                 continue
-            log("  compressing %d -> %d bytes" % (len(raw_before), len(raw_after)))
-            with heartbeat("  brotli q10 (dots = 1s)"):
-                payload_bytes, quality = compress_fitting(raw_after, found["br_len"])
-            log("  got %d bytes with brotli quality %d" % (len(payload_bytes), quality))
-            info = dict(
-                asset=asset,
-                raw_before=len(raw_before),
-                raw_after=len(raw_after),
-                br_before=found["br_len"],
-                br_after=len(payload_bytes),
-                slack=found["br_len"] - len(payload_bytes),
-                blob_off=found["blob_off"],
-                desc_off=found["desc_off"],
-                fits=len(payload_bytes) <= found["br_len"],
+            pending.append((asset, found, raw_after))
+
+    # Compress the chunks concurrently: brotli releases the GIL, and the big chunks
+    # dominate the runtime.
+    if pending:
+        log("compressing %d chunk(s) in parallel" % len(pending))
+        with heartbeat("  brotli q10"):
+            with concurrent.futures.ThreadPoolExecutor(len(pending)) as pool:
+                futures = [
+                    pool.submit(compress_fitting, raw_after, found["br_len"])
+                    for _asset, found, raw_after in pending
+                ]
+                results = [f.result() for f in futures]
+
+    for (asset, found, raw_after), (payload_bytes, quality) in zip(pending, results):
+        log("  %s -> %d bytes (quality %d, %d bytes of headroom)"
+            % (asset.rsplit("/", 1)[-1], len(payload_bytes), quality,
+               found["br_len"] - len(payload_bytes)))
+        info = dict(
+            asset=asset,
+            raw_before=len(found["raw"]),
+            raw_after=len(raw_after),
+            br_before=found["br_len"],
+            br_after=len(payload_bytes),
+            slack=found["br_len"] - len(payload_bytes),
+            blob_off=found["blob_off"],
+            desc_off=found["desc_off"],
+            fits=len(payload_bytes) <= found["br_len"],
+        )
+        if not info["fits"]:
+            raise ValueError(
+                "does not fit: %s needs %d > %d (overflow %d bytes). "
+                "Shorten the payload or use a larger asset."
+                % (asset, len(payload_bytes), found["br_len"],
+                   len(payload_bytes) - found["br_len"])
             )
-            if not info["fits"]:
-                raise ValueError(
-                    "does not fit: %s needs %d > %d (overflow %d bytes). "
-                    "Shorten the payload or use a larger asset."
-                    % (asset, len(payload_bytes), found["br_len"],
-                       len(payload_bytes) - found["br_len"])
-                )
-            plan.append(dict(info=info, packed=payload_bytes,
-                             old_len=found["br_len"],
-                             blob_off=found["blob_off"],
-                             desc_off=found["desc_off"]))
+        plan.append(dict(info=info, packed=payload_bytes,
+                         old_len=found["br_len"],
+                         blob_off=found["blob_off"],
+                         desc_off=found["desc_off"]))
 
     if dry_run:
         return [p["info"] for p in plan]

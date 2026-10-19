@@ -2,9 +2,13 @@
   "Browse catalog": "浏览模型目录",
   "Browse model catalog": "浏览模型目录",
   "Copy contents": "复制内容",
+  "Customize": "插件",
+  "Customize sections": "自定义分区",
   "Detached": "已分离",
   "Documentation": "使用文档",
+  "Go to Customize": "前往插件",
   "Kind": "类型",
+  "Manage Copilot integrations and extensions from Customize.": "在「插件」中管理 Copilot 集成与扩展。",
   "Move": "移动",
   "Move to": "移动到",
   "Notice": "提示",
@@ -21,5 +25,6 @@
   "Resume": "继续",
   "Resume Agent": "继续代理",
   "Resume session": "继续会话",
-  "Setup": "配置"
+  "Setup": "配置",
+  "Standout ways to customize Copilot.": "值得一试的 Copilot 插件与自定义方式。"
 }

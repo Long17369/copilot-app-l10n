@@ -368,11 +368,46 @@ def make_append_transform(payload: bytes, force: bool):
     return append
 
 
+def _plan_key(exe: str) -> str:
+    import hashlib
+
+    # Key on the *pristine* size so the cache survives the install that changes the exe.
+    bak = l10n.backup_path(exe)
+    size = os.path.getsize(bak) if os.path.exists(bak) else os.path.getsize(exe)
+    payload = build_payload()
+    return hashlib.sha1(
+        ("%s|%d|%s" % (exe, size, hashlib.sha1(payload).hexdigest())).encode()
+    ).hexdigest()
+
+
 def plan_shards(exe: str, shards):
+    """Assign each shard to a chunk, reusing a previous plan when nothing changed."""
+    state = _load_state()
+    cache = state.setdefault("plans", {})
+    key = _plan_key(exe)
+    cached = cache.get(key)
+    if cached:
+        paths = {a for a, _ in cached}
+        if all(p in ASSET_CANDIDATES for p in paths):
+            l10n.log("shard plan: reusing cached plan for %d shard(s)" % len(cached))
+            return [(asset, shard) for (asset, _), shard in zip(cached, shards)]
+
+    assignments = _plan_shards_uncached(exe, shards)
+    cache[key] = [[a, len(s)] for a, s in assignments]
+    # Keep the cache small; only the newest few layouts matter.
+    if len(cache) > 8:
+        for stale in list(cache)[:-8]:
+            cache.pop(stale, None)
+    _save_state(state)
+    return assignments
+
+
+def _plan_shards_uncached(exe: str, shards):
     """Assign each shard to the chunk with the most remaining room.
 
-    Returns (assignments, assets_used) where assignments is a list of
-    (asset_path, [shard_script, ...]).
+    Sizes are estimated from each chunk's own compression ratio instead of
+    re-compressing the chunk once per shard: the real write recompresses the final
+    bytes anyway, so measuring here twice was pure overhead.
     """
     bak = l10n.backup_path(exe)
     source = bak if os.path.exists(bak) else exe
@@ -386,28 +421,39 @@ def plan_shards(exe: str, shards):
     if not found:
         raise ValueError("none of the candidate chunks exist in %s" % source)
 
-    # Room per chunk, measured against its pristine compressed size, tracking what has
-    # already been assigned so shards really spread across chunks when needed.
-    pending = {candidate: info["raw"] for candidate, info in found}
-    limits = {candidate: info["br_len"] for candidate, info in found}
-
+    # Fill chunks from the largest downwards and only measure a chunk when it is about
+    # to be used, so unused candidates cost nothing. Quality 10 matches what the write
+    # uses (quality 9 compresses noticeably worse and would reject valid layouts).
+    by_size = [c for c, info in sorted(found, key=lambda kv: -kv[1]["br_len"])]
+    remaining = list(shards)
     assignments = []
-    order = [c for c, _ in sorted(found, key=lambda kv: -kv[1]["br_len"])]
-    for shard in shards:
-        best = None
-        for candidate in order:
-            packed = l10n.compress(pending[candidate] + b"\n" + shard.encode() + b"\n")
-            slack = limits[candidate] - len(packed)
-            if slack >= MIN_SLACK and (best is None or slack > best[1]):
-                best = (candidate, slack)
-        if best is None:
-            raise ValueError(
-                "the translation payload no longer fits in the startup chunks "
-                "(shard of %d bytes). Shorten the dictionary or add a candidate chunk."
-                % len(shard)
-            )
-        assignments.append((best[0], shard))
-        pending[best[0]] = pending[best[0]] + b"\n" + shard.encode() + b"\n"
+    for candidate in by_size:
+        if not remaining:
+            break
+        info = dict(found)[candidate]
+        raw = info["raw"]
+        baseline = len(l10n.compress_at(raw, 10))
+        room = info["br_len"] - baseline
+        ratio = (baseline / len(raw)) if raw else 0.25
+        l10n.log("%s: headroom %d bytes, ratio %.2f"
+                 % (candidate, room, ratio))
+        while remaining:
+            payload = len(remaining[0].encode())
+            cost = int(payload * ratio * 1.35) + 512
+            if room - cost < MIN_SLACK:
+                break
+            assignments.append((candidate, remaining.pop(0)))
+            room -= cost
+    if remaining:
+        raise ValueError(
+            "the translation payload no longer fits in the startup chunks "
+            "(%d shard(s) left, %d bytes). Shorten the dictionary or add a candidate "
+            "chunk." % (len(remaining), len(remaining[0].encode()))
+        )
+
+    used = sorted({a for a, _ in assignments})
+    l10n.log("shard plan: %s" % ", ".join(
+        "%s x%d" % (a, sum(1 for x, _ in assignments if x == a)) for a in used))
     return assignments
 
 
