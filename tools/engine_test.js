@@ -31,6 +31,7 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <span id="palette">Catppuccin Mocha</span>
     <span id="models">Models (4)</span>
     <span id="quota">49% quota used</span>
+    <span id="spaced"><span>计算机操作</span><span> 预览</span></span>
     <div class="untranslated">Totally unknown phrase here</div>
     <div role="log" aria-live="polite">
       <div class="markdown-body"><p>Copilot said: three issues fixed.</p></div>
@@ -118,6 +119,7 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('palette not reported', misses.includes('Catppuccin Mocha'), false);
     check('count rule with parentheses', text('#models'), '模型（4）');
     check('quota rule', text('#quota'), '已用配额 49%');
+    check('no stray space between CJK fragments', text('#spaced'), '计算机操作预览');
     check('fragment joined across nodes', text('#frag1'),
           '在系统托盘中显示 GitHub Copilot 图标。');
     check('fragment tail cleared', text('#frag2'), '');

@@ -1,0 +1,20 @@
+{
+  "Working on your request…": "正在处理你的请求…",
+  "Processing your request…": "正在处理你的请求…",
+  "Working on your request...": "正在处理你的请求…",
+  "Processing your request...": "正在处理你的请求…",
+  "Thinking…": "思考中…",
+  "Thinking...": "思考中…",
+  "Generating response…": "正在生成回复…",
+  "Loading more results…": "正在加载更多结果…",
+  "Status: Working": "状态：处理中",
+  "Status: Idle": "状态：空闲",
+  "Status: Queued": "状态：排队中",
+  "Status: Paused": "状态：已暂停",
+  "Status: Failed": "状态：失败",
+  "Status: Done": "状态：完成",
+  "Working": "处理中",
+  "Idle": "空闲",
+  "Paused": "已暂停",
+  "Queued": "排队中"
+}

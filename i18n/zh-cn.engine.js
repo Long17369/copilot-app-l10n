@@ -95,6 +95,12 @@
     [/^without shortcut$/i, '无快捷键'],
     [/^(.+),\s*view details$/i, '「$1」，查看详情'],
     [/^Background\s+(\d+)$/i, '后台 $1'],
+    [/^Search\s+(\d+)\s+skills?$/i, '搜索 $1 个 Skill'],
+    [/^Enable:\s*(.+)$/i, '启用：$1'],
+    [/^Filter by type:\s*(.+)$/i, '按类型筛选：$1'],
+    [/^Add server:\s*(.+)$/i, '添加服务器：$1'],
+    [/^Failed to browse marketplace\s*"(.+)"$/i, '浏览市场「$1」失败'],
+    [/^MCP Servers\s*·\s*(.+)$/i, 'MCP 服务器 · $1'],
     [/^(.*?)\.\s*Status:\s*(Idle|Working|Busy|Running|Paused|Queued|Failed|Done)\.?$/i,
       '$1。状态：$2'],
     [/^Status:\s*(Idle|Working|Busy|Running|Paused|Queued|Failed|Done)$/i, '状态：$1'],
@@ -170,6 +176,10 @@
     /^[·•]\s*[\w.-]+$/,                                 // "· github.com" style suffix
     /^(Ubuntu|Debian|Fedora|CentOS|Rocky|Alpine|Arch|openSUSE|Kali|WSL)([\s\d.\-]*)$/i,
     /^[A-Za-z][\w+.-]*-[0-9][\w.-]*$/,                  // Ubuntu-20.04, model ids
+    /^@[\w.-]+$/,                                        // @handle
+    /^[\w.-]+\s+@[\w.-]+$/,                              // "name @handle"
+    /^GitHub v[\d.]+$/,                                  // version stamp
+    /^MCP Servers\s*·\s/,                                // third-party catalog blurb
     /^[a-z0-9][\w.-]*(\/[\w.-]+)?$/                       // bare identifiers
   ];
 
@@ -281,7 +291,24 @@
     // Mixed CJK+Latin means this string was already localized (possibly composite).
     if (HAS_CJK.test(key)) return;
     var t = translate(key);
-    if (t !== null && t !== key) node.nodeValue = m[1] + t + m[3];
+    if (t === null || t === key) return;
+    var lead = m[1];
+    var trail = m[3];
+    // "计算机操作" + " 预览" leaves a stray ASCII space between two Chinese fragments;
+    // Chinese typography has no such space, so drop it next to neighbouring CJK text.
+    if (HAS_CJK.test(t)) {
+      var prev = node.previousSibling;
+      var prevText = prev ? (prev.nodeType === 3 ? prev.nodeValue : prev.textContent) : '';
+      if (lead && prevText && HAS_CJK.test(prevText.replace(/\s+$/, '').slice(-1))) {
+        lead = '';
+      }
+      var next = node.nextSibling;
+      var nextText = next ? (next.nodeType === 3 ? next.nodeValue : next.textContent) : '';
+      if (trail && nextText && HAS_CJK.test(nextText.replace(/^\s+/, '').charAt(0))) {
+        trail = '';
+      }
+    }
+    node.nodeValue = lead + t + trail;
   }
 
   function setTranslatedAttribute(el, name, value) {
@@ -389,6 +416,24 @@
     }
   }
 
+  /* Chinese typography has no space between两个 CJK fragments, but the source English
+   * often separates them ("Computer Use" + " preview"). Strip the space left between
+   * two Chinese text runs. */
+  function normalizeCjkSpacing(root) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var node;
+    var prevChar = '';
+    while ((node = walker.nextNode())) {
+      var value = node.nodeValue;
+      if (!value || !value.trim()) continue;
+      var first = value.trim().charAt(0);
+      if (prevChar && HAS_CJK.test(prevChar) && HAS_CJK.test(first) && /^\s/.test(value)) {
+        node.nodeValue = value.replace(/^\s+/, '');
+      }
+      prevChar = node.nodeValue.trim().slice(-1);
+    }
+  }
+
   function walk(node) {
     if (!node) return;
     if (node.nodeType === 3) {
@@ -417,6 +462,7 @@
     for (var i = 0; i < all.length; i++) {
       if (!isSkipped(all[i])) localizeAttrs(all[i]);
     }
+    normalizeCjkSpacing(node);
   }
 
   var observer = new MutationObserver(function (mutations) {
