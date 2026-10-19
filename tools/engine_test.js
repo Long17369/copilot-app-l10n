@@ -32,10 +32,16 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <span id="models">Models (4)</span>
     <span id="quota">49% quota used</span>
     <div class="untranslated">Totally unknown phrase here</div>
-    <div class="conversation-pane">
-      <p>Copilot said: three issues fixed.</p>
+    <div role="log" aria-live="polite">
+      <div class="markdown-body"><p>Copilot said: three issues fixed.</p></div>
       <span>Run engine tests and 14 other tool calls</span>
       <code>cd C:\work</code>
+    </div>
+    <div class="messageComposer__toolbar">
+      <button id="stopbtn" aria-label="Stop, Escape">Stop</button>
+      <button id="detailsbtn" aria-label="Response details, more info">Details</button>
+      <span id="background2">Background 2</span>
+      <span id="statusline">test model. Status: Working.</span>
     </div>
   </aside>
 </body></html>`.replace('__WINPATH__', String.raw`C:\Users\long1\copilot-l10n\README.md`);
@@ -78,13 +84,23 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('unknown left alone', text('.untranslated'), 'Totally unknown phrase here');
 
     // Conversation content must never be translated nor reported.
-    const convo = window.document.querySelector('.conversation-pane');
+    const convo = window.document.querySelector('[role="log"]');
     check('transcript not translated', convo.querySelector('p').textContent,
           'Copilot said: three issues fixed.');
     check('tool title not reported',
           window.__COPILOT_L10N_MISSES__().some((s) => s.indexOf('tool calls') >= 0), false);
     check('transcript text not reported',
           window.__COPILOT_L10N_MISSES__().some((s) => s.indexOf('Copilot said') >= 0), false);
+
+    // The composer toolbar lives in classes that merely contain "message"; it must
+    // still be translated.
+    check('composer stop label', window.document.getElementById('stopbtn').getAttribute('aria-label'),
+          '停止，Esc');
+    check('composer details label',
+          window.document.getElementById('detailsbtn').getAttribute('aria-label'),
+          '回复详情，更多信息');
+    check('background count', text('#background2'), '后台 2');
+    check('session status line', text('#statusline'), 'test model。状态：Working');
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
     check('gap badge present', !!badge, true);

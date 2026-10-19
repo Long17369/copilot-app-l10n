@@ -94,6 +94,10 @@
     [/^Assign…$/i, '分配…'],
     [/^without shortcut$/i, '无快捷键'],
     [/^(.+),\s*view details$/i, '「$1」，查看详情'],
+    [/^Background\s+(\d+)$/i, '后台 $1'],
+    [/^(.*?)\.\s*Status:\s*(Idle|Working|Busy|Running|Paused|Queued|Failed|Done)\.?$/i,
+      '$1。状态：$2'],
+    [/^Status:\s*(Idle|Working|Busy|Running|Paused|Queued|Failed|Done)$/i, '状态：$1'],
     [/^Models\s*\((\d+)\)$/i, '模型（$1）'],
     [/^Not installed\s*·\s*(.+)$/i, '未安装 · $1'],
     [/^Not installed\s*·\s*(\d+\s*MB)$/i, '未安装 · $1'],
@@ -129,16 +133,18 @@
     '[contenteditable="true"]',
     '.markdown-body', '.monaco-editor',
     '[data-l10n-skip]',
-    /* Conversation transcript: agent/user messages, tool-call titles and command
-     * output are session content, not UI chrome. Translating them would corrupt the
-     * transcript, so the whole region is left alone. */
-    '[role="log"]', '[role="article"]', '[aria-live="polite"][aria-relevant*="text"]',
-    '[class*="markdown"]', '[class*="Markdown"]',
+    /* Conversation *content* only. Class names are matched on the specific content
+     * containers: a broad `[class*="message"]` also matches the composer toolbar
+     * (`messageComposer`), which is UI chrome that must stay translatable. */
+    '[role="log"]', '[role="article"]',
+    '[class*="markdown"]', '[class*="Markdown"]', '[class*="prose"]',
     '[class*="transcript"]', '[class*="Transcript"]',
-    '[class*="conversation"]', '[class*="Conversation"]',
-    '[class*="message"]', '[class*="Message"]',
-    '[data-testid*="message"]', '[data-testid*="transcript"]',
-    '[data-testid*="tool-call"]', '[data-testid*="activity"]'
+    '[class*="messageBody"]', '[class*="message-body"]',
+    '[class*="messageContent"]', '[class*="message-content"]',
+    '[class*="userMessage"]', '[class*="assistantMessage"]',
+    '[data-testid*="message-body"]', '[data-testid*="messageBody"]',
+    '[data-testid*="message-content"]', '[data-testid*="transcript"]',
+    '[data-testid*="tool-call"]'
   ].join(',');
 
   var cache = new Map();

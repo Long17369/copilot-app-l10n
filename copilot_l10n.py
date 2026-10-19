@@ -847,37 +847,46 @@ def cmd_list(exe: str, pattern: str = ""):
 
 
 def cmd_status(exe: str, asset: str):
-    """Report whether the localizer payload / lang attribute are already applied."""
+    """Report whether the localizer is installed and up to date."""
     import apply_zh  # local import: apply_zh imports this module
 
+    engine_sig = b'[copilot-l10n] zh-CN active'
     candidates = list(apply_zh.ASSET_CANDIDATES) if asset in ("auto", "", None) else [asset]
+    shards = len(apply_zh.build_shard_scripts())
+    found_engine = 0
+    found_shards = 0
     with AssetFile(exe) as af:
-        total = 0
         for candidate in candidates:
             try:
-                found = af.locate(candidate)
+                raw = af.locate(candidate)["raw"]
             except Exception:
                 continue
-            count = found["raw"].count(MARKER.encode())
+            count = raw.count(MARKER.encode())
             if count:
-                print("chunk     : %s -> payload x%d" % (candidate, count))
-            total += count
-        if not total:
-            print("chunk     : no payload in %s" % ", ".join(candidates))
+                found_shards += count
+                print("chunk     : %s -> shards x%d" % (candidate, count))
+            found_engine += raw.count(engine_sig)
         try:
             html = af.locate("index.html")["raw"]
             lang_zh = b'lang="zh-CN"' in html
         except Exception:
             lang_zh = None
     print("index.html: lang=\"zh-CN\" %s" % ("present" if lang_zh else "absent"))
+    print("engine    : %d copy(ies), %d shard(s) found / %d expected"
+          % (found_engine, found_shards, shards))
     bak = backup_path(exe)
-    print("backup    : %s (%s)" % (
-        bak, "ok" if os.path.exists(bak) else "MISSING"))
-    installed = bool(total) and lang_zh is True
+    print("backup    : %s (%s)" % (bak, "ok" if os.path.exists(bak) else "MISSING"))
+
+    installed = found_engine >= 1 and lang_zh is True
     print("state     : %s" % ("INSTALLED" if installed else "NOT INSTALLED"))
-    if total > 1:
-        print("WARNING   : payload applied %d times; run install again to reset the "
-              "baseline and re-apply once." % total)
+
+    if found_engine > 1:
+        print("WARNING   : %d engine copies found; re-run install to reset the baseline."
+              % found_engine)
+    if installed:
+        current = apply_zh.is_current(exe, "auto")
+        print("up to date: %s" % ("yes" if current else
+                                  "no (dictionary changed, re-run install)"))
 
 
 def cmd_verify(exe: str, assets):
