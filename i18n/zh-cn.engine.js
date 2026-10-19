@@ -209,7 +209,7 @@
     if (!/^[A-Z]/.test(probe) && !/^(e\.g\.|i\.e\.)/i.test(probe)) return;
     // Already localized, or user/agent content that merely contains Latin text.
     if (HAS_CJK.test(probe)) return;
-    if (probe.length > 200) return;
+    if (probe.length > 400) return;
     if (isNoise(probe)) return;
     misses.add(key);
   }
@@ -244,9 +244,16 @@
    * "New session, Ctrl + N. New chat, Ctrl + Shift + N.".
    * Translate such a string part by part, keeping separators in Chinese form. */
   function translateComposite(key) {
-    if (key.length > 240) return null;
+    if (key.length > 140) return null;
     var pieces = key.split(/(,\s+|\.\s+|;\s+)/);
     if (pieces.length < 3) return null;
+
+    // A real label list is short; a sentence that merely contains commas is not. If any
+    // part is long, treat the whole string as prose and leave it alone.
+    var parts = pieces.filter(function (_, i) { return i % 2 === 0; });
+    for (var p = 0; p < parts.length; p++) {
+      if (parts[p].trim().split(/\s+/).length > 5) return null;
+    }
 
     var out = '';
     var changed = false;
@@ -261,6 +268,14 @@
       if (!core) continue;
       var hasDot = /\.$/.test(core);
       var probe = hasDot ? core.slice(0, -1) : core;
+      // Only treat a part as translatable when it looks like a label: at least two
+      // words, or a capitalised single word. Otherwise common lowercase words inside a
+      // sentence ("test", "and deploy ...") get swapped for their dictionary entry.
+      var wordCount = probe.split(/\s+/).length;
+      if (wordCount < 2 && !/^[A-Z]/.test(probe)) {
+        out += core;
+        continue;
+      }
       var t = lookup(probe, true);
       if (t === null) {
         out += core;
@@ -322,13 +337,16 @@
   /* Code never gets translated, whatever container it is in. */
   var CODE_LIKE = /[;{}]|=>|\$\{|`|^\s*\/\/|^\s*#\s|\b(function|const|let|var|return|import|export)\b/;
 
+  var MAX_TEXT = 900;
+  var MAX_KEY = 480;
+
   function localizeTextNode(node) {
     var value = node.nodeValue;
-    if (!value || value.length > 400) return;
+    if (!value || value.length > MAX_TEXT) return;
     var m = /^(\s*)([\s\S]*?)(\s*)$/.exec(value);
     if (!m) return;
     var key = m[2];
-    if (!key || key.length > 160) return;
+    if (!key || key.length > MAX_KEY) return;
     // Text without Latin letters is already localized (or user content).
     if (!HAS_LATIN.test(key)) return;
     // Mixed CJK+Latin means this string was already localized (possibly composite).
@@ -357,7 +375,7 @@
 
   function setTranslatedAttribute(el, name, value) {
     var key = value.trim();
-    if (!key || key.length > 160) return;
+    if (!key || key.length > MAX_KEY) return;
     if (!HAS_LATIN.test(key)) return;
     var t = translate(key);
     if (t !== null && t !== key) el.setAttribute(name, value.replace(key, t));

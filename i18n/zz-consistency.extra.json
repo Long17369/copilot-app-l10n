@@ -1,4 +1,6 @@
 {
+  "Browse catalog": "浏览模型目录",
+  "Browse model catalog": "浏览模型目录",
   "Copy contents": "复制内容",
   "Detached": "已分离",
   "Documentation": "使用文档",
@@ -6,6 +8,7 @@
   "Move": "移动",
   "Move to": "移动到",
   "Notice": "提示",
+  "Open catalog": "打开模型目录",
   "Open in": "打开方式",
   "Open in a session": "在会话中打开",
   "Open in app unavailable": "无法在应用中打开",

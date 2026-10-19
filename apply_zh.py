@@ -247,17 +247,33 @@ def apply_terminology(dictionary: dict, term: dict) -> dict:
     return out
 
 
+def _fragment_order(name: str):
+    """Deterministic merge order: numeric, with zz-* corrections applied last.
+
+    Plain alphabetical sorting put ``ui2`` after ``ui15``, so an older fragment could
+    silently override a newer translation.
+    """
+    if name.startswith("zz-"):
+        return (2, 0, name)
+    digits = re.findall(r"\d+", name)
+    if digits:
+        return (1, int(digits[-1]), name)
+    return (0, 0, name)
+
+
 def load_dictionary() -> dict:
     """Merge every dictionary fragment in i18n/, base dictionary first.
 
     ``zh-cn.dict.json`` is the core list; additional ``*.extra.json`` fragments are
     layered on top (later files win), which keeps incremental additions reviewable.
-    The terminology policy is applied last so it always wins.
+    ``zz-*.extra.json`` files always win, so corrections are never shadowed.
+    The terminology policy is applied last.
     """
     files = ["zh-cn.dict.json"]
     files += sorted(
-        name for name in os.listdir(I18N_DIR)
-        if name.endswith(".extra.json") and name != "zh-cn.dict.json"
+        (name for name in os.listdir(I18N_DIR)
+         if name.endswith(".extra.json")),
+        key=_fragment_order,
     )
     merged = {}
     for name in files:

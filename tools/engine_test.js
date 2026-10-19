@@ -31,6 +31,7 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <span id="palette">Catppuccin Mocha</span>
     <span id="models">Models (4)</span>
     <span id="quota">49% quota used</span>
+    <span id="sentence">Build, test, and deploy hosted things on your own.</span>
     <span id="spaced"><span>计算机操作</span><span> 预览</span></span>
     <div class="untranslated">Totally unknown phrase here</div>
     <div role="log" aria-live="polite">
@@ -116,7 +117,7 @@ window.document.addEventListener('DOMContentLoaded', () => {
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
     check('gap badge present', !!badge, true);
-    check('badge counts only real gaps', badge && badge.textContent, '译1');
+    check('badge counts only real gaps', badge && badge.textContent, '译2');
 
     const misses = window.__COPILOT_L10N_MISSES__();
     check('no chinese in gap list', misses.some((s) => /[\u4e00-\u9fff]/.test(s)), false);
@@ -130,6 +131,10 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('palette not reported', misses.includes('Catppuccin Mocha'), false);
     check('count rule with parentheses', text('#models'), '模型（4）');
     check('quota rule', text('#quota'), '已用配额 49%');
+    // A lowercase single word inside a sentence must not be swapped for its dictionary
+    // entry ("test" -> 测试), which produced "构建，test，and deploy ...".
+    check('no partial word swaps in sentences', text('#sentence'),
+          'Build, test, and deploy hosted things on your own.');
     check('no stray space between CJK fragments', text('#spaced'), '计算机操作预览');
     check('fragment joined across nodes', text('#frag1'),
           '在系统托盘中显示 GitHub Copilot 图标。');
