@@ -89,6 +89,9 @@
     /* Shortcut manager and other generated labels. */
     [/^Edit shortcut for\s+(.+)$/i, '编辑「$1」的快捷键'],
     [/^Assign shortcut for\s+(.+)$/i, '为「$1」分配快捷键'],
+    /* Shortcut list rows render as "<keys>, edit shortcut for <command>". */
+    [/^(.+?),\s*edit shortcut for\s+(.+)$/i, '$1，编辑「$2」的快捷键'],
+    [/^edit shortcut for\s+(.+)$/i, '编辑「$1」的快捷键'],
     [/^Edit shortcut\b/i, '编辑快捷键'],
     [/^More actions for\s+(.+)$/i, '「$1」的更多操作'],
     [/^Assign…$/i, '分配…'],
@@ -128,6 +131,7 @@
 
   var ATTRS = [
     'placeholder',
+    'data-placeholder',
     'title',
     'aria-label',
     'aria-description',
@@ -494,20 +498,42 @@
     }
   }
 
-  /* Chinese typography has no space between两个 CJK fragments, but the source English
-   * often separates them ("Computer Use" + " preview"). Strip the space left between
-   * two Chinese text runs. */
+  /* Chinese typography has no space between two CJK fragments, but the source English
+   * often separates them ("Computer Use" + " preview", or a bare " or " between two
+   * links). Strip ASCII spaces that end up between two Chinese runs. */
   function normalizeCjkSpacing(root) {
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     var node;
     var prevChar = '';
     while ((node = walker.nextNode())) {
       var value = node.nodeValue;
-      if (!value || !value.trim()) continue;
+      if (!value) continue;
+      if (!value.trim()) { continue; }
+
       var first = value.trim().charAt(0);
-      if (prevChar && HAS_CJK.test(prevChar) && HAS_CJK.test(first) && /^\s/.test(value)) {
-        node.nodeValue = value.replace(/^\s+/, '');
+      var last = value.trim().slice(-1);
+      var changed = value;
+
+      // Leading space after Chinese
+      if (prevChar && HAS_CJK.test(prevChar) && HAS_CJK.test(first)) {
+        changed = changed.replace(/^\s+/, '');
       }
+      // Trailing space before Chinese
+      var next = node.nextSibling;
+      var nextText = '';
+      while (next && !nextText) {
+        if (next.nodeType === 3) nextText = next.nodeValue;
+        else if (next.nodeType === 1) nextText = next.textContent;
+        if (!nextText || !nextText.trim()) {
+          next = next.nextSibling;
+          nextText = '';
+        }
+      }
+      if (HAS_CJK.test(last) && nextText && HAS_CJK.test(nextText.trim().charAt(0))) {
+        changed = changed.replace(/\s+$/, '');
+      }
+
+      if (changed !== value) node.nodeValue = changed;
       prevChar = node.nodeValue.trim().slice(-1);
     }
   }
@@ -523,7 +549,9 @@
       // A skipped region is never translated, but form controls still deserve a
       // translated placeholder/aria-label (e.g. the instructions textarea).
       var tag = node.tagName;
-      if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') {
+      if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT' ||
+          node.isContentEditable ||
+          (node.getAttribute && node.getAttribute('contenteditable') === 'true')) {
         localizeAttrs(node);
       }
       return;
@@ -551,10 +579,13 @@
     for (var i = 0; i < all.length; i++) {
       var el = all[i];
       if (isSkipped(el)) {
-        // Skipped regions are never translated, but form controls still deserve a
-        // translated placeholder/aria-label (e.g. the custom-instructions textarea).
+        // Skipped regions are never translated, but their editable controls still
+        // deserve a translated placeholder/aria-label (the instructions editor is a
+        // textarea or a contenteditable Lexical surface).
         var tag = el.tagName;
-        if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') {
+        if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT' ||
+            el.isContentEditable ||
+            (el.getAttribute && el.getAttribute('contenteditable') === 'true')) {
           localizeAttrs(el);
         }
         continue;

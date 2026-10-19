@@ -1,0 +1,16 @@
+{
+  "Let Copilot choose a model or combine work from multiple models for your task. Try HydraFusion instead of choosing a single model yourself. Research preview: experimental behavior may change.": "让 Copilot 为你的任务选择模型，或组合多个模型协同工作。可以试试 HydraFusion，而不是自己挑单一模型。研究预览：实验性行为可能变化。",
+  "Let Copilot choose a model or combine work from multiple models for your task. Try HydraFusion instead of choosing a single model yourself. Research preview; experimental behavior may change.": "让 Copilot 为你的任务选择模型，或组合多个模型协同工作。可以试试 HydraFusion，而不是自己挑单一模型。研究预览：实验性行为可能变化。",
+  "HydraFusion takes effect after restarting the app.": "HydraFusion 需要重启应用后生效。",
+  "Restart to apply": "重启以应用",
+  "Control which notifications appear and how long they are displayed.": "控制显示哪些通知以及显示时长。",
+  "Control which notifications appear and how they are displayed.": "控制显示哪些通知以及如何显示。",
+  "or": "或",
+  "and": "和",
+  "e.g. Prefer functional patterns. Write concise commit messages. Always add tests for new code.": "例如：优先使用函数式写法。提交信息保持简洁。为新代码补充测试。",
+  "Prefer functional patterns. Write concise commit messages. Always add tests for new code.": "优先使用函数式写法。提交信息保持简洁。为新代码补充测试。",
+  "Enable additional usage or upgrade plan to continue after plan credits run out.": "启用额外用量或升级 plan，以在 plan 额度用尽后继续。",
+  "Enable additional usage": "启用额外用量",
+  "to continue after plan credits run out.": "以在 plan 额度用尽后继续。",
+  "edit shortcut for": "编辑快捷键："
+}

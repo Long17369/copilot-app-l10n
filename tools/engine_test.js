@@ -51,6 +51,8 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     </div>
     <span id="prose-semicolon">Research preview; experimental behavior may change.</span>
     <textarea id="instr" placeholder="Always add tests for new code.">code text here</textarea>
+    <div id="lexical" contenteditable="true" data-placeholder="Always add tests for new code.">typed content</div>
+    <span id="orword"><a>Enable additional usage</a> or <a>upgrade plan</a> to continue after plan credits run out.</span>
   </aside>
 </body></html>`.replace('__WINPATH__', String.raw`C:\Users\long1\copilot-l10n\README.md`);
 
@@ -126,6 +128,15 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('textarea placeholder translated',
           window.document.getElementById('instr').getAttribute('placeholder'),
           '始终为新代码添加测试。');
+    // The instructions editor may be a contenteditable Lexical surface.
+    check('contenteditable placeholder translated',
+          window.document.getElementById('lexical').getAttribute('data-placeholder'),
+          '始终为新代码添加测试。');
+    check('contenteditable content untouched',
+          text('#lexical'), 'typed content');
+    // A bare conjunction between two link nodes is a separator and must be localized.
+    check('bare conjunction translated', text('#orword'),
+          '启用额外用量或升级 plan 以在 plan 额度用尽后继续。');
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
     check('gap badge present', !!badge, true);
