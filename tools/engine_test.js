@@ -49,6 +49,8 @@ const html = `<!DOCTYPE html><html lang="en"><body>
       <span id="codestr">Hi, </span>
       <span id="codelabel">Cancel</span>
     </div>
+    <span id="prose-semicolon">Research preview; experimental behavior may change.</span>
+    <textarea id="instr" placeholder="Always add tests for new code.">code text here</textarea>
   </aside>
 </body></html>`.replace('__WINPATH__', String.raw`C:\Users\long1\copilot-l10n\README.md`);
 
@@ -114,6 +116,16 @@ window.document.addEventListener('DOMContentLoaded', () => {
     check('code content not reported',
           window.__COPILOT_L10N_MISSES__().some(
             (s) => s.startsWith('Hi,') || s === 'Cancel'), false);
+
+    // A semicolon in ordinary prose must not make the string look like code.
+    check('prose with semicolon translated', text('#prose-semicolon'),
+          '研究预览，实验性行为可能变化。');
+    // Textarea content stays untouched, but its placeholder is UI copy.
+    check('textarea content untouched',
+          window.document.getElementById('instr').value, 'code text here');
+    check('textarea placeholder translated',
+          window.document.getElementById('instr').getAttribute('placeholder'),
+          '始终为新代码添加测试。');
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
     check('gap badge present', !!badge, true);

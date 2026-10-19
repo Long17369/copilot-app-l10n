@@ -99,6 +99,8 @@
     [/^Enable:\s*(.+)$/i, '启用：$1'],
     [/^Filter by type:\s*(.+)$/i, '按类型筛选：$1'],
     [/^Add server:\s*(.+)$/i, '添加服务器：$1'],
+    [/^(\d+)\s+actions?$/i, '$1 个操作'],
+    [/^(\d+)\s+shortcuts?$/i, '$1 个快捷键'],
     [/^Install:\s*(.+)$/i, '安装：$1'],
     [/^Failed to browse marketplace\s*"(.+)"$/i, '浏览市场「$1」失败'],
     [/^MCP Servers\s*·\s*(.+)$/i, 'MCP 服务器 · $1'],
@@ -334,8 +336,20 @@
     return false;
   }
 
-  /* Code never gets translated, whatever container it is in. */
-  var CODE_LIKE = /[;{}]|=>|\$\{|`|^\s*\/\/|^\s*#\s|\b(function|const|let|var|return|import|export)\b/;
+  /* Code never gets translated, whatever container it is in. Kept deliberately narrow:
+   * a stray ";" appears in ordinary prose ("Research preview; experimental behavior
+   * may change."), so only real syntax markers count. Monospace detection is the
+   * primary defence; this is only a safety net. */
+  var CODE_LIKE = new RegExp([
+    '\\$\\{',            // template interpolation
+    '=>',                // arrow function
+    '`',                 // template literal
+    '[{}]',              // block/object braces
+    '^\\s*//',           // line comment
+    '^\\s*#\\s',         // shell comment
+    '\\b(?:function|const|let|var|return|import|export)\\s+[\\w$]',
+    '\\w+\\([^)]*\\)\\s*;\\s*$'  // statement call ending in ;
+  ].join('|'));
 
   var MAX_TEXT = 900;
   var MAX_KEY = 480;
@@ -505,7 +519,15 @@
       return;
     }
     if (node.nodeType !== 1) return;
-    if (isSkipped(node)) return;
+    if (isSkipped(node)) {
+      // A skipped region is never translated, but form controls still deserve a
+      // translated placeholder/aria-label (e.g. the instructions textarea).
+      var tag = node.tagName;
+      if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') {
+        localizeAttrs(node);
+      }
+      return;
+    }
     // Code, diffs and editors are rendered in monospace: never touch them.
     if (isMonospace(node)) return;
     localizeAttrs(node);
@@ -527,7 +549,17 @@
 
     var all = node.querySelectorAll ? node.querySelectorAll('*') : [];
     for (var i = 0; i < all.length; i++) {
-      if (!isSkipped(all[i])) localizeAttrs(all[i]);
+      var el = all[i];
+      if (isSkipped(el)) {
+        // Skipped regions are never translated, but form controls still deserve a
+        // translated placeholder/aria-label (e.g. the custom-instructions textarea).
+        var tag = el.tagName;
+        if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') {
+          localizeAttrs(el);
+        }
+        continue;
+      }
+      localizeAttrs(el);
     }
     normalizeCjkSpacing(node);
   }
