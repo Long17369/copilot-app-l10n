@@ -44,6 +44,10 @@ const html = `<!DOCTYPE html><html lang="en"><body>
       <span id="background2">Background 2</span>
       <span id="statusline">test model. Status: Working.</span>
     </div>
+    <div id="codeview" style="font-family: monospace">
+      <span id="codestr">Hi, </span>
+      <span id="codelabel">Cancel</span>
+    </div>
   </aside>
 </body></html>`.replace('__WINPATH__', String.raw`C:\Users\long1\copilot-l10n\README.md`);
 
@@ -102,6 +106,13 @@ window.document.addEventListener('DOMContentLoaded', () => {
           '回复详情，更多信息');
     check('background count', text('#background2'), '后台 2');
     check('session status line', text('#statusline'), 'test model。状态：Working');
+
+    // Monospace content is code: never translated, even when it matches a dict key.
+    check('code string not translated', text('#codestr'), 'Hi, ');
+    check('code label not translated', text('#codelabel'), 'Cancel');
+    check('code content not reported',
+          window.__COPILOT_L10N_MISSES__().some(
+            (s) => s.startsWith('Hi,') || s === 'Cancel'), false);
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
     check('gap badge present', !!badge, true);

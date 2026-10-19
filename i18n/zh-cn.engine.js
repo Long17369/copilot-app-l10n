@@ -99,6 +99,7 @@
     [/^Enable:\s*(.+)$/i, '启用：$1'],
     [/^Filter by type:\s*(.+)$/i, '按类型筛选：$1'],
     [/^Add server:\s*(.+)$/i, '添加服务器：$1'],
+    [/^Install:\s*(.+)$/i, '安装：$1'],
     [/^Failed to browse marketplace\s*"(.+)"$/i, '浏览市场「$1」失败'],
     [/^MCP Servers\s*·\s*(.+)$/i, 'MCP 服务器 · $1'],
     [/^(.*?)\.\s*Status:\s*(Idle|Working|Busy|Running|Paused|Queued|Failed|Done)\.?$/i,
@@ -150,7 +151,13 @@
     '[class*="userMessage"]', '[class*="assistantMessage"]',
     '[data-testid*="message-body"]', '[data-testid*="messageBody"]',
     '[data-testid*="message-content"]', '[data-testid*="transcript"]',
-    '[data-testid*="tool-call"]'
+    '[data-testid*="tool-call"]',
+    /* Code surfaces: diffs, editors and highlighted snippets are content. They are
+     * usually spans/divs, not <pre>/<code>, so they need explicit selectors. */
+    '[class*="diff"]', '[class*="Diff"]',
+    '[class*="syntax"]', '[class*="highlight"]', '[class*="prism"]',
+    '[class*="monaco"]', '[class*="editor-"]', '[class*="Editor-"]',
+    '[data-language]', '[class*="blob-"]', '[class*="line-number"]'
   ].join(',');
 
   var cache = new Map();
@@ -179,6 +186,9 @@
     /^@[\w.-]+$/,                                        // @handle
     /^[\w.-]+\s+@[\w.-]+$/,                              // "name @handle"
     /^GitHub v[\d.]+$/,                                  // version stamp
+    /^wsl:\/\//,                                         // wsl://Ubuntu-24.04
+    /^%\w+%$/,                                           // %username% placeholder
+    /^(Ubuntu|docker-desktop)$/i,
     /^MCP Servers\s*·\s/,                                // third-party catalog blurb
     /^[a-z0-9][\w.-]*(\/[\w.-]+)?$/                       // bare identifiers
   ];
@@ -279,6 +289,39 @@
   var HAS_LATIN = /[A-Za-z]/;
   var HAS_CJK = /[\u4e00-\u9fff]/;
 
+  /* Anything rendered in a monospace family is code or a code diff, never UI copy.
+   * This catches code views whose markup is plain divs/spans instead of <pre>/<code>. */
+  var monoCache = null;
+  var MONO_FONT = /mono|consolas|cascadia|menlo|courier|lucida console|source code|fira code|jetbrains/i;
+
+  function isMonospace(el) {
+    if (!monoCache) {
+      monoCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+    }
+    var cur = el;
+    var depth = 0;
+    while (cur && cur.nodeType === 1 && depth < 8) {
+      if (monoCache) {
+        var cached = monoCache.get(cur);
+        if (cached === true) return true;
+      }
+      var mono = false;
+      try {
+        var family = window.getComputedStyle(cur).fontFamily || '';
+        mono = MONO_FONT.test(family);
+      } catch (e) { /* ignore */ }
+      if (monoCache) monoCache.set(cur, mono);
+      if (mono) return true;
+      if (cur === document.body) break;
+      cur = cur.parentElement;
+      depth++;
+    }
+    return false;
+  }
+
+  /* Code never gets translated, whatever container it is in. */
+  var CODE_LIKE = /[;{}]|=>|\$\{|`|^\s*\/\/|^\s*#\s|\b(function|const|let|var|return|import|export)\b/;
+
   function localizeTextNode(node) {
     var value = node.nodeValue;
     if (!value || value.length > 400) return;
@@ -290,6 +333,7 @@
     if (!HAS_LATIN.test(key)) return;
     // Mixed CJK+Latin means this string was already localized (possibly composite).
     if (HAS_CJK.test(key)) return;
+    if (CODE_LIKE.test(key)) return;
     var t = translate(key);
     if (t === null || t === key) return;
     var lead = m[1];
@@ -321,6 +365,7 @@
 
   function localizeAttrs(el) {
     if (!el.getAttribute) return;
+    if (isMonospace(el)) return;
     for (var i = 0; i < ATTRS.length; i++) {
       var v = el.getAttribute(ATTRS[i]);
       if (v) setTranslatedAttribute(el, ATTRS[i], v);
@@ -367,6 +412,7 @@
     while ((node = walker.nextNode())) {
       var parent = node.parentElement;
       if (!parent || isSkipped(parent)) continue;
+      if (isMonospace(parent)) continue;
       var value = node.nodeValue;
       if (!value || value.length > 200) continue;
       // A whitespace-only node plus its neighbour is formatting, not a composed label.
@@ -442,6 +488,8 @@
     }
     if (node.nodeType !== 1) return;
     if (isSkipped(node)) return;
+    // Code, diffs and editors are rendered in monospace: never touch them.
+    if (isMonospace(node)) return;
     localizeAttrs(node);
     if (node.shadowRoot) walk(node.shadowRoot);
     // Join fragments before the plain text pass, so a label split across two nodes is
@@ -452,6 +500,7 @@
       acceptNode: function (n) {
         var parent = n.parentElement;
         if (!parent || isSkipped(parent)) return NodeFilter.FILTER_REJECT;
+        if (isMonospace(parent)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });

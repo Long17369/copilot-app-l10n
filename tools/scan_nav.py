@@ -32,6 +32,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pages", nargs="*", default=DEFAULT_PAGES)
     parser.add_argument("--wait", type=float, default=1.6)
+    parser.add_argument("--reopen", help="control to activate when a page entry is missing")
     parser.add_argument("--out", default=os.path.join(ROOT, "build", "ui-live.txt"))
     args = parser.parse_args()
 
@@ -65,6 +66,12 @@ def main() -> int:
 
     for page in args.pages:
         control = find_control(window, page)
+        if control is None and args.reopen:
+            # Settings sub-sections only exist while the settings dialog is open.
+            opener = find_control(window, args.reopen)
+            if opener is not None and activate(opener):
+                time.sleep(1.0)
+                control = find_control(window, page)
         if control is None:
             print("== %s == (entry not found)" % page)
             continue
