@@ -536,11 +536,30 @@ def ensure_clean_baseline(exe: str, assets, dry_run=False) -> dict:
         return {a: "backup-created" for a in assets}
 
     if os.path.getsize(exe) != os.path.getsize(bak):
-        raise ValueError(
-            "executable size differs from the backup (%d vs %d): the app was probably "
-            "updated. Delete %s to adopt the new version as the new baseline, then "
-            "re-run." % (os.path.getsize(exe), os.path.getsize(bak), bak)
-        )
+        # The app was updated: the old backup describes a different binary. Adopt the new
+        # executable as the baseline when it is still pristine; otherwise the previous
+        # patch is somewhere in it and there is nothing safe to diff against.
+        with AssetFile(exe) as af:
+            for asset in assets:
+                try:
+                    raw = af.locate(asset)["raw"]
+                except LookupError:
+                    continue  # chunk names change between versions
+                if not _is_pristine(raw):
+                    raise ValueError(
+                        "%s is already patched and the backup belongs to a different "
+                        "build. Reinstall the app, then run again." % asset
+                    )
+        if dry_run:
+            return {a: "would-rebuild-backup" for a in assets}
+        log("app updated (%d -> %d bytes): rebuilding the pristine baseline"
+            % (os.path.getsize(bak), os.path.getsize(exe)))
+        try:
+            os.remove(bak)
+        except OSError:
+            pass
+        ensure_backup(exe)
+        return {a: "backup-rebuilt" for a in assets}
 
     restores = []
     with AssetFile(bak) as b_af, AssetFile(exe) as e_af:
@@ -866,7 +885,13 @@ def cmd_status(exe: str, asset: str):
     import apply_zh  # local import: apply_zh imports this module
 
     engine_sig = b'[copilot-l10n] zh-CN active'
-    candidates = list(apply_zh.ASSET_CANDIDATES) if asset in ("auto", "", None) else [asset]
+    if asset in ("auto", "", None):
+        discovered, entry_asset = apply_zh.discover_assets(exe)
+        candidates = [p for p, _ in discovered]
+        if entry_asset:
+            candidates.append(entry_asset)
+    else:
+        candidates = [asset]
     shards = len(apply_zh.build_shard_scripts())
     found_engine = 0
     found_shards = 0

@@ -33,24 +33,118 @@ I18N_DIR = os.path.join(ROOT, "i18n")
 DICT = os.path.join(I18N_DIR, "zh-cn.dict.json")
 BUILD = os.path.join(ROOT, "build")
 
-# Startup chunks loaded by the entry graph, in preference order. The first one with
-# enough Brotli headroom is used; hashes change when the app updates, so
-# `copilot_l10n.py list App-` and `--asset` are the escape hatch.
-ASSET_CANDIDATES = (
-    "/assets/App-DxoK3vc2.js",
-    "/assets/useWebSocketTransport-Cqgftpse.js",
-    "/assets/router-T3TZDMzd.js",
-    "/assets/ExtensionsView-M-L961S-.js",
-    "/assets/switch-cyfgugQG.js",
-)
 DEFAULT_ASSET = "auto"
 MIN_SLACK = 1024
 
-# The entry chunk is loaded synchronously by index.html. Appending a tiny import of the
-# payload chunk there makes the translator available from the first paint, even when the
-# payload lives in a chunk the router would otherwise load lazily.
-ENTRY_ASSET = "/assets/index-B4Phv94s.js"
 BOOT_MARKER = "/*__COPILOT_L10N_BOOT__*/"
+
+# Asset names carry a content hash that changes on every app update, so patterns are
+# matched on the stable prefix instead of the full name.
+CANDIDATE_PREFIXES = (
+    "/assets/useWebSocketTransport-",
+    "/assets/App-",
+    "/assets/router-",
+    "/assets/ExtensionsView-",
+    "/assets/switch-",
+    "/assets/PullRequestDetailView-",
+    "/assets/vendor-terminal-",
+)
+ENTRY_PREFIXES = ("/assets/index-",)
+
+
+def _paths_with_prefix(af, prefixes, limit=40):
+    """Collect embedded asset paths whose name starts with one of `prefixes`.
+
+    Only the path strings are searched the first time; each hit is then validated through
+    the descriptor table, so a stale string in the binary cannot be used.
+    """
+    found = []
+    for prefix in prefixes:
+        needle = prefix.encode("latin1")
+        start = 0
+        while len(found) < limit:
+            pos = af.data.find(needle, start)
+            if pos == -1:
+                break
+            start = pos + 1
+            end = pos
+            while end < len(af.data):
+                ch = af.data[end]
+                if not (48 <= ch <= 57 or 65 <= ch <= 90 or 97 <= ch <= 122
+                        or ch in (0x2E, 0x2D, 0x5F, 0x2F)):  # . - _ /
+                    break
+                end += 1
+            path = bytes(af.data[pos:end]).decode("latin1")
+            if not path.endswith(".js"):
+                continue
+            try:
+                info = af.locate(path)
+            except LookupError:
+                continue
+            if len(info["raw"]) < 1024:
+                continue
+            if path not in [p for p, _ in found]:
+                found.append((path, info))
+    return found
+
+
+_DISCOVER_CACHE = {}
+
+
+def baseline_source(exe: str) -> str:
+    """Path to read pristine bytes from: the backup only when it matches this build."""
+    bak = l10n.backup_path(exe)
+    try:
+        if os.path.exists(bak) and os.path.getsize(bak) == os.path.getsize(exe):
+            return bak
+    except OSError:
+        pass
+    return exe
+
+
+def discover_assets(exe: str):
+    """Return (candidates, entry) for the current build.
+
+    Candidates are ordered by available headroom; the entry chunk is the one loaded by
+    index.html, identified by its small size and index- prefix. Results are cached per
+    file revision because the pipeline asks several times.
+    """
+    source = baseline_source(exe)
+    try:
+        stat = os.stat(source)
+        key = (source, stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        key = None
+    if key is not None and key in _DISCOVER_CACHE:
+        return _DISCOVER_CACHE[key]
+
+    with l10n.AssetFile(source) as af:
+        candidates = _paths_with_prefix(af, CANDIDATE_PREFIXES)
+        entries = _paths_with_prefix(af, ENTRY_PREFIXES, limit=10)
+
+    if not candidates:
+        raise ValueError(
+            "no startup chunks found in %s; is this a supported Copilot build?"
+            % source
+        )
+
+    # The entry chunk is the index-*.js that index.html imports; pick the one whose size
+    # looks like an entry module, falling back to the smallest index- chunk.
+    entry = None
+    for path, info in sorted(entries, key=lambda kv: len(kv[1]["raw"])):
+        if 20000 <= len(info["raw"]) <= 60000:
+            entry = path
+            break
+    if entry is None and entries:
+        entry = sorted(entries, key=lambda kv: len(kv[1]["raw"]))[0][0]
+
+    candidates.sort(key=lambda kv: -kv[1]["br_len"])
+    l10n.log("discovered %d candidate chunk(s), entry %s"
+             % (len(candidates), entry))
+    result = (candidates, entry)
+    if key is not None:
+        _DISCOVER_CACHE[key] = result
+    return result
 
 
 STATE_FILE = os.path.join(BUILD, "last-chunk.json")
@@ -98,7 +192,8 @@ def is_current(exe: str, asset: str) -> bool:
     if entry.get("exe_size") != os.path.getsize(exe):
         return False
     chunk = entry.get("asset")
-    if chunk not in ASSET_CANDIDATES:
+    candidates, entry_asset = discover_assets(exe)
+    if chunk not in [p for p, _ in candidates]:
         return False
     with l10n.AssetFile(exe) as af:
         try:
@@ -106,8 +201,8 @@ def is_current(exe: str, asset: str) -> bool:
                 return False
             if b'lang="zh-CN"' not in af.locate("index.html")["raw"]:
                 return False
-            if chunk != ENTRY_ASSET and \
-                    BOOT_MARKER.encode() not in af.locate(ENTRY_ASSET)["raw"]:
+            if chunk != entry_asset and entry_asset and \
+                    BOOT_MARKER.encode() not in af.locate(entry_asset)["raw"]:
                 return False
         except (LookupError, KeyError):
             return False
@@ -121,27 +216,17 @@ def pick_asset(exe: str, payload: bytes) -> str:
     to a fresh scan if it no longer fits). Otherwise candidates are tried biggest-first:
     headroom scales with chunk size, so the first attempt almost always wins.
     """
+    found, _entry = discover_assets(exe)
+    available = [p for p, _ in found]
+
     state = _load_state()
     remembered = state.get(exe)
     if isinstance(remembered, dict):
         remembered = remembered.get("asset")
-    if remembered in ASSET_CANDIDATES:
+    if remembered in available:
         l10n.log("reusing previously chosen chunk: %s" % remembered)
         return remembered
 
-    bak = l10n.backup_path(exe)
-    source = bak if os.path.exists(bak) else exe
-    found = []
-    with l10n.AssetFile(source) as af:
-        for candidate in ASSET_CANDIDATES:
-            try:
-                found.append((candidate, af.locate(candidate)))
-            except LookupError:
-                continue
-    if not found:
-        raise ValueError("none of the candidate chunks exist in %s" % source)
-
-    found.sort(key=lambda item: -item[1]["br_len"])
     defects = []
     for candidate, info in found:
         l10n.log("measuring %s (%.1f MB)" % (candidate, len(info["raw"]) / 1e6))
@@ -372,8 +457,8 @@ def _plan_key(exe: str) -> str:
     import hashlib
 
     # Key on the *pristine* size so the cache survives the install that changes the exe.
-    bak = l10n.backup_path(exe)
-    size = os.path.getsize(bak) if os.path.exists(bak) else os.path.getsize(exe)
+    source = baseline_source(exe)
+    size = os.path.getsize(source)
     payload = build_payload()
     return hashlib.sha1(
         ("%s|%d|%s" % (exe, size, hashlib.sha1(payload).hexdigest())).encode()
@@ -388,7 +473,9 @@ def plan_shards(exe: str, shards):
     cached = cache.get(key)
     if cached:
         paths = {a for a, _ in cached}
-        if all(p in ASSET_CANDIDATES for p in paths):
+        found, _entry = discover_assets(exe)
+        available = {p for p, _ in found}
+        if paths and paths <= available:
             l10n.log("shard plan: reusing cached plan for %d shard(s)" % len(cached))
             return [(asset, shard) for (asset, _), shard in zip(cached, shards)]
 
@@ -409,17 +496,9 @@ def _plan_shards_uncached(exe: str, shards):
     re-compressing the chunk once per shard: the real write recompresses the final
     bytes anyway, so measuring here twice was pure overhead.
     """
-    bak = l10n.backup_path(exe)
-    source = bak if os.path.exists(bak) else exe
-    found = []
-    with l10n.AssetFile(source) as af:
-        for candidate in ASSET_CANDIDATES:
-            try:
-                found.append((candidate, af.locate(candidate)))
-            except LookupError:
-                continue
+    found, _entry = discover_assets(exe)
     if not found:
-        raise ValueError("none of the candidate chunks exist in %s" % source)
+        raise ValueError("none of the candidate chunks exist in %s" % exe)
 
     # Fill chunks from the largest downwards and only measure a chunk when it is about
     # to be used, so unused candidates cost nothing. Quality 10 matches what the write
@@ -481,11 +560,14 @@ def apply_patch(exe: str, asset: str, dry_run: bool = False, force: bool = False
     edits.append(("index.html", index_html_transform))
 
     used = [a for a in by_asset]
-    baseline_assets = [a for a in ASSET_CANDIDATES if a not in used]
-    bootstrap_specs = [a for a in used if a != ENTRY_ASSET]
+    candidates, entry_asset = discover_assets(exe)
+    baseline_assets = [p for p, _ in candidates if p not in used]
+    bootstrap_specs = [a for a in used if a != entry_asset]
     if bootstrap_specs:
-        edits.append((ENTRY_ASSET, bootstrap_transform(bootstrap_specs)))
-        baseline_assets = [a for a in baseline_assets if a != ENTRY_ASSET]
+        if not entry_asset:
+            raise ValueError("could not identify the entry chunk (index-*.js)")
+        edits.append((entry_asset, bootstrap_transform(bootstrap_specs)))
+        baseline_assets = [a for a in baseline_assets if a != entry_asset]
 
     infos = l10n.rewrite_assets(exe, edits, dry_run, baseline_assets=baseline_assets)
     if not dry_run:
