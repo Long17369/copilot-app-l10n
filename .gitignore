@@ -6,3 +6,4 @@ __pycache__/
 *.l10n-bak
 *.exe
 *.log
+build/

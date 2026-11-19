@@ -97,6 +97,8 @@
     [/^Assign…$/i, '分配…'],
     [/^without shortcut$/i, '无快捷键'],
     [/^(.+),\s*view details$/i, '「$1」，查看详情'],
+    [/^(.+?),\s*edit$/i, '$1，编辑'],
+    [/^(.+?),\s*delete$/i, '$1，删除'],
     [/^Background\s+(\d+)$/i, '后台 $1'],
     [/^Search\s+(\d+)\s+skills?$/i, '搜索 $1 个 Skill'],
     [/^Enable:\s*(.+)$/i, '启用：$1'],

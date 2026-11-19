@@ -35,6 +35,7 @@ BUILD = os.path.join(ROOT, "build")
 
 DEFAULT_ASSET = "auto"
 MIN_SLACK = 1024
+_CONSERVATIVE = False
 
 BOOT_MARKER = "/*__COPILOT_L10N_BOOT__*/"
 
@@ -489,6 +490,40 @@ def plan_shards(exe: str, shards):
     return assignments
 
 
+BASELINE_CACHE = os.path.join(BUILD, "baselines.json")
+
+
+def _baseline_len(asset: str, info) -> tuple:
+    """Exact quality-10 compressed length of the pristine chunk, cached on disk.
+
+    Compressing a 3 MB chunk takes ~6 s, but the result only depends on the chunk itself,
+    so it is stored per (asset, compressed length, raw length). Dictionary edits then
+    re-plan for free; only an app update pays the cost again.
+    """
+    key = "%s|%d|%d" % (asset, info["br_len"], len(info["raw"]))
+    cache = {}
+    try:
+        with open(BASELINE_CACHE, "r", encoding="utf-8") as fh:
+            cache = json.load(fh)
+    except (OSError, ValueError):
+        cache = {}
+
+    if key in cache:
+        baseline = cache[key]
+    else:
+        raw = info["raw"]
+        baseline = len(l10n.compress_at(raw, 10))
+        cache[key] = baseline
+        try:
+            os.makedirs(BUILD, exist_ok=True)
+            with open(BASELINE_CACHE, "w", encoding="utf-8") as fh:
+                json.dump(cache, fh, indent=2)
+        except OSError:
+            pass
+    ratio = (baseline / len(info["raw"])) if info["raw"] else 0.25
+    return baseline, ratio
+
+
 def _plan_shards_uncached(exe: str, shards):
     """Assign each shard to the chunk with the most remaining room.
 
@@ -501,8 +536,9 @@ def _plan_shards_uncached(exe: str, shards):
         raise ValueError("none of the candidate chunks exist in %s" % exe)
 
     # Fill chunks from the largest downwards and only measure a chunk when it is about
-    # to be used, so unused candidates cost nothing. Quality 10 matches what the write
-    # uses (quality 9 compresses noticeably worse and would reject valid layouts).
+    # to be used, so unused candidates cost nothing. The baseline is measured on a
+    # sample: compressing a whole 3 MB chunk costs ~6 s and the real write compresses
+    # the final bytes anyway, so a 512 KB window scaled to the full length is plenty.
     by_size = [c for c, info in sorted(found, key=lambda kv: -kv[1]["br_len"])]
     remaining = list(shards)
     assignments = []
@@ -510,12 +546,11 @@ def _plan_shards_uncached(exe: str, shards):
         if not remaining:
             break
         info = dict(found)[candidate]
-        raw = info["raw"]
-        baseline = len(l10n.compress_at(raw, 10))
+        baseline, ratio = _baseline_len(candidate, info)
         room = info["br_len"] - baseline
-        ratio = (baseline / len(raw)) if raw else 0.25
-        l10n.log("%s: headroom %d bytes, ratio %.2f"
-                 % (candidate, room, ratio))
+        if _CONSERVATIVE:
+            room = int(room * 0.6)
+        l10n.log("%s: headroom %d bytes, ratio %.2f" % (candidate, room, ratio))
         while remaining:
             payload = len(remaining[0].encode())
             cost = int(payload * ratio * 1.35) + 512
@@ -576,17 +611,22 @@ def apply_patch(exe: str, asset: str, dry_run: bool = False, force: bool = False
 
 
 def apply_patch_with_fallback(exe: str, asset: str, dry_run: bool = False):
-    """apply_patch, but drop a stale remembered chunk and re-measure if it no longer fits."""
+    """apply_patch, retrying with a conservative plan if a chunk turns out not to fit."""
+    global _CONSERVATIVE
     try:
         return apply_patch(exe, asset, dry_run)
     except ValueError as exc:
         if "does not fit" not in str(exc) or asset not in ("auto", "", None):
             raise
-        l10n.log("remembered chunk no longer fits; re-measuring all candidates")
-        state = _load_state()
-        state.pop(exe, None)
-        _save_state(state)
-        return apply_patch(exe, asset, dry_run)
+        l10n.log("a chunk did not fit; re-planning with a conservative estimate")
+        _CONSERVATIVE = True
+        try:
+            state = _load_state()
+            state.pop(exe, None)
+            _save_state(state)
+            return apply_patch(exe, asset, dry_run)
+        finally:
+            _CONSERVATIVE = False
 
 
 def main(argv=None) -> int:
