@@ -49,7 +49,12 @@ def wait_until_writable(exe: str, timeout: int) -> bool:
 def report_state(exe: str, asset: str) -> bool:
     import apply_zh
 
-    candidates = list(apply_zh.ASSET_CANDIDATES) if asset in ("auto", "", None) else [asset]
+    if asset in ("auto", "", None):
+        discovered, entry_asset = apply_zh.discover_assets(exe)
+        candidates = [p for p, _ in discovered]
+    else:
+        candidates = [asset]
+        entry_asset = None
     with l10n.AssetFile(exe) as af:
         has_payload = False
         for candidate in candidates:
@@ -65,7 +70,7 @@ def report_state(exe: str, asset: str) -> bool:
         html = af.locate("index.html")["raw"]
         has_lang = b'lang="zh-CN"' in html
         try:
-            entry = af.locate(apply_zh.ENTRY_ASSET)["raw"]
+            entry = af.locate(entry_asset)["raw"]
             has_boot = apply_zh.BOOT_MARKER.encode() in entry
         except Exception:
             has_boot = False
