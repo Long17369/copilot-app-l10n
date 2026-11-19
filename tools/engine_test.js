@@ -54,6 +54,8 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <div id="lexical" contenteditable="true" data-placeholder="Always add tests for new code.">typed content</div>
     <span id="orword"><a>Enable additional usage</a> or <a>upgrade plan</a> to continue after plan credits run out.</span>
     <p id="inlinecode">Add a <code>.worktreeinclude</code> file to the repo root to auto-copy gitignored files into new worktrees.</p>
+    <div id="chip-remote">Access your sessions from GitHub web and mobile. Use <code class="font-mono">/remote</code> to toggle per session. This setting and /remote can't change Remote control for sessions running in a remote environment.</div>
+    <p id="chip-ready">Regex used to detect a dev server URL in Run output. Matches VS Code's <code class="font-mono">serverReadyAction.pattern</code>. Clear the field and save to go back to the default detector.</p>
   </aside>
 </body></html>`.replace('__WINPATH__', String.raw`C:\Users\long1\copilot-l10n\README.md`);
 
@@ -147,6 +149,14 @@ window.document.addEventListener('DOMContentLoaded', () => {
             '在仓库根目录添加 .worktreeinclude 文件，即可把被 gitignore 的文件自动复制到新的工作树。');
       check('inline-code chip preserved', !!(code && code.textContent === '.worktreeinclude'), true);
     })();
+
+    // Only the first /remote is a chip; the second occurrence is plain text.
+    check('chip sentence with plain repeat', text('#chip-remote'),
+          '从 GitHub 网页版和移动端访问你的会话。使用 /remote 可按会话切换。此设置与 /remote 都无法更改在远程环境中运行的会话的远程控制。');
+    // The chip is followed by ". " in the source; Chinese needs a space before the
+    // following Chinese run but none around the sentence punctuation.
+    check('chip followed by sentence punctuation', text('#chip-ready'),
+          '用于在运行输出中识别开发服务器 URL 的正则表达式。与 VS Code 的 serverReadyAction.pattern 行为一致。清空该字段并保存即可恢复默认检测器。');
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
     check('gap badge present', !!badge, true);

@@ -555,6 +555,28 @@
     return /\bcode\b|-code\b|inline-code/i.test(cls);
   }
 
+  /* Template keys are sensitive to spacing around the chip marker, and the app is not
+   * consistent about it (sometimes the space belongs to the preceding node, sometimes
+   * to the following one). Compare with spacing around the marker normalized away. */
+  var NORM_TEMPLATES = null;
+
+  function normTemplate(text) {
+    return text.replace(/\s*\u0001\s*/g, MARK).replace(/\s+/g, ' ').trim();
+  }
+
+  function lookupTemplate(core) {
+    if (NORM_TEMPLATES === null) {
+      NORM_TEMPLATES = {};
+      for (var key in DICT) {
+        if (Object.prototype.hasOwnProperty.call(DICT, key) && key.indexOf(MARK) !== -1) {
+          NORM_TEMPLATES[normTemplate(key)] = DICT[key];
+        }
+      }
+    }
+    var hit = NORM_TEMPLATES[normTemplate(core)];
+    return hit === undefined ? null : hit;
+  }
+
   function localizeInlineCodeSentence(el) {
     var kids = el.childNodes;
     if (!kids || kids.length < 3 || kids.length > 12) return false;
@@ -582,6 +604,7 @@
     if (!core || core.length > 600) return false;
 
     var translated = lookup(core, true);
+      if (translated === null) translated = lookupTemplate(core);
     if (translated === null) return false;
 
     var segments = translated.split(MARK);
@@ -605,7 +628,32 @@
         }
       }
     }
+    // Chinese text needs a space around a Latin code chip; the app relies on separate
+    // whitespace nodes, which do not always survive the rewrite.
+    ensureChipSpacing(el);
     return applied;
+  }
+
+  var CJK_PUNCT = /[\u3001\u3002\uff0c\uff1a\uff1b\uff01\uff1f]/;
+
+  function ensureChipSpacing(el) {
+    var kids = el.childNodes;
+    for (var i = 0; i + 1 < kids.length; i++) {
+      var a = kids[i];
+      var b = kids[i + 1];
+      if (a.nodeType === 3 && isInlineCode(b)) {
+        var before = a.nodeValue.replace(/\s+$/, '');
+        if (!before) continue;
+        var lastChar = before.slice(-1);
+        // Chinese punctuation already separates the chip ("后，/permissions").
+        a.nodeValue = CJK_PUNCT.test(lastChar) ? before : before + ' ';
+      } else if (isInlineCode(a) && b.nodeType === 3) {
+        var after = b.nodeValue.replace(/^\s+/, '');
+        if (!after) continue;
+        var first = after.charAt(0);
+        b.nodeValue = CJK_PUNCT.test(first) ? after : ' ' + after;
+      }
+    }
   }
 
   function hasInlineCodeChild(el) {
