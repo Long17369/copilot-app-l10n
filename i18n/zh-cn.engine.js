@@ -540,6 +540,93 @@
     }
   }
 
+  /* Sentences that contain inline code chips ("Add a [.worktreeinclude] file to the repo
+   * root ...") arrive as several sibling nodes, so no single text node matches a
+   * dictionary key. Build a template where each inline code element becomes MARK, look
+   * that up, then distribute the translated segments back into the prose nodes while
+   * leaving the code chips untouched. */
+  var MARK = '\u0001';
+  var INLINE_CODE = /^(CODE|KBD|SAMP)$/;
+
+  function isInlineCode(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (INLINE_CODE.test(el.tagName)) return true;
+    var cls = (el.getAttribute && el.getAttribute('class')) || '';
+    return /\bcode\b|-code\b|inline-code/i.test(cls);
+  }
+
+  function localizeInlineCodeSentence(el) {
+    var kids = el.childNodes;
+    if (!kids || kids.length < 3 || kids.length > 12) return false;
+
+    var codes = 0;
+    var template = '';
+    var hasProse = false;
+    for (var i = 0; i < kids.length; i++) {
+      var kid = kids[i];
+      if (kid.nodeType === 3) {
+        template += kid.nodeValue;
+        if (kid.nodeValue.trim()) hasProse = true;
+      } else if (isInlineCode(kid)) {
+        template += MARK;
+        codes++;
+      } else {
+        return false;  // something more complex than prose + code chips
+      }
+    }
+    if (!codes || !hasProse) return false;
+
+    var lead = /^\s*/.exec(template)[0];
+    var trail = /\s*$/.exec(template)[0];
+    var core = template.slice(lead.length, template.length - trail.length);
+    if (!core || core.length > 600) return false;
+
+    var translated = lookup(core, true);
+    if (translated === null) return false;
+
+    var segments = translated.split(MARK);
+    if (segments.length !== codes + 1) return false;
+
+    // Hand the segments to the prose nodes in order; code chips stay in place.
+    var next = lead;
+    var seg = 0;
+    var applied = false;
+    for (var j = 0; j < kids.length; j++) {
+      var node = kids[j];
+      if (node.nodeType === 3) {
+        if (node.nodeValue.trim()) {
+          var before = /^\s*/.exec(node.nodeValue)[0];
+          var after = /\s*$/.exec(node.nodeValue)[0];
+          // Segments from the dictionary are delimited by the chip marker; the spacing
+          // around the chip comes from the original node, so trim the segment itself.
+          node.nodeValue = before + segments[seg].trim() + after;
+          seg++;
+          applied = true;
+        }
+      }
+    }
+    return applied;
+  }
+
+  function hasInlineCodeChild(el) {
+    var kids = el && el.childNodes;
+    if (!kids) return false;
+    for (var i = 0; i < kids.length; i++) {
+      if (isInlineCode(kids[i])) return true;
+    }
+    return false;
+  }
+
+  /* Apply the template pass to every descendant that holds a code chip, before the
+   * per-text-node pass can translate its fragments. */
+  function localizeInlineCodeDescendants(root) {
+    if (!root.querySelectorAll) return;
+    var els = root.querySelectorAll('p,div,span,li,label,section,td');
+    for (var i = 0; i < els.length; i++) {
+      if (hasInlineCodeChild(els[i])) localizeInlineCodeSentence(els[i]);
+    }
+  }
+
   function walk(node) {
     if (!node) return;
     if (node.nodeType === 3) {
@@ -562,6 +649,10 @@
     if (isMonospace(node)) return;
     localizeAttrs(node);
     if (node.shadowRoot) walk(node.shadowRoot);
+    // Inline-code sentences must be matched as a whole before the per-node pass splits
+    // them further.
+    localizeInlineCodeSentence(node);
+    localizeInlineCodeDescendants(node);
     // Join fragments before the plain text pass, so a label split across two nodes is
     // translated as a whole and its fragments are never reported as gaps.
     localizeJoinedText(node);
@@ -571,6 +662,9 @@
         var parent = n.parentElement;
         if (!parent || isSkipped(parent)) return NodeFilter.FILTER_REJECT;
         if (isMonospace(parent)) return NodeFilter.FILTER_REJECT;
+        // Text that belongs to an inline-code sentence is handled by the template pass
+        // as a whole; translating fragments here would break the match.
+        if (hasInlineCodeChild(parent)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });

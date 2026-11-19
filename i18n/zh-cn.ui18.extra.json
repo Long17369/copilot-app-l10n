@@ -1,0 +1,5 @@
+{
+  "Add a \u0001 file to the repo root to auto-copy gitignored files into new worktrees.": "在仓库根目录添加 \u0001 文件，即可把被 gitignore 的文件自动复制到新的工作树。",
+  "Access your sessions from GitHub web and mobile. Use \u0001 to toggle per session. This setting and \u0001 can't change Remote control for sessions running in a remote environment.": "从 GitHub 网页版和移动端访问你的会话。使用 \u0001 可按会话切换。此设置与 \u0001 都无法更改在远程环境中运行的会话的远程控制。",
+  "Choose when new local sessions ask before running tools. Once a session has started, \u0001 manual|assisted|allow-all sets a session-specific override. Managed settings can restrict modes or set a different starting mode without changing this saved preference.": "选择新的本地会话在运行工具前是否询问。会话启动后，\u0001 manual|assisted|allow-all 可设置会话级覆盖。受管设置可限制模式或设定不同的起始模式，而不会改变此处保存的偏好。"
+}

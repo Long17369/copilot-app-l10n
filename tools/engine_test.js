@@ -53,6 +53,7 @@ const html = `<!DOCTYPE html><html lang="en"><body>
     <textarea id="instr" placeholder="Always add tests for new code.">code text here</textarea>
     <div id="lexical" contenteditable="true" data-placeholder="Always add tests for new code.">typed content</div>
     <span id="orword"><a>Enable additional usage</a> or <a>upgrade plan</a> to continue after plan credits run out.</span>
+    <p id="inlinecode">Add a <code>.worktreeinclude</code> file to the repo root to auto-copy gitignored files into new worktrees.</p>
   </aside>
 </body></html>`.replace('__WINPATH__', String.raw`C:\Users\long1\copilot-l10n\README.md`);
 
@@ -137,6 +138,15 @@ window.document.addEventListener('DOMContentLoaded', () => {
     // A bare conjunction between two link nodes is a separator and must be localized.
     check('bare conjunction translated', text('#orword'),
           '启用额外用量或升级 plan 以在 plan 额度用尽后继续。');
+    // A sentence interrupted by an inline code chip is matched as a whole template, and
+    // the chip element itself must survive untouched.
+    (function () {
+      const p = window.document.getElementById('inlinecode');
+      const code = p.querySelector('code');
+      check('inline-code sentence translated', p.textContent,
+            '在仓库根目录添加 .worktreeinclude 文件，即可把被 gitignore 的文件自动复制到新的工作树。');
+      check('inline-code chip preserved', !!(code && code.textContent === '.worktreeinclude'), true);
+    })();
 
     const badge = window.document.getElementById('copilot-l10n-gaps');
     check('gap badge present', !!badge, true);
